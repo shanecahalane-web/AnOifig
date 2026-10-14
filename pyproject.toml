@@ -1,0 +1,52 @@
+[build-system]
+requires = ["hatchling>=1.25,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "anoifig"
+version = "0.1.0"
+description = "An Oifig tenant-aware backend foundation"
+readme = "README.md"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+  "alembic>=1.13,<2",
+  "fastapi>=0.121,<1",
+  "psycopg[binary]>=3.2,<4",
+  "pydantic-settings>=2.6,<3",
+  "pyjwt[crypto]>=2.10,<3",
+  "sqlalchemy>=2.0,<2.1",
+  "uvicorn>=0.32,<1",
+]
+
+[dependency-groups]
+dev = [
+  "httpx2>=2.13.1,<3",
+  "mypy>=1.14,<2",
+  "pytest>=8.3,<10",
+  "pytest-cov>=6,<8",
+  "ruff>=0.11,<1",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/anoifig"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-config --strict-markers"
+markers = ["integration: requires dedicated PostgreSQL with separate owner and runtime roles"]
+filterwarnings = ["error"]
+
+[tool.ruff]
+target-version = "py313"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["anoifig"]
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+files = ["src"]

@@ -1,0 +1,79 @@
+name: anoifig
+
+services:
+  postgres:
+    image: postgres:17-bookworm
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_DB: anoifig
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Copy .env.example to .env first}
+      ANOIFIG_APP_PASSWORD: ${ANOIFIG_APP_PASSWORD:?Copy .env.example to .env first}
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/postgres/init-postgres.sh:/docker-entrypoint-initdb.d/01-init-anoifig.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d anoifig"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  migrate:
+    build:
+      context: .
+      target: runtime
+    environment:
+      ANOIFIG_ENVIRONMENT: development
+      ANOIFIG_DATABASE_URL: postgresql+psycopg://anoifig_app:${ANOIFIG_APP_PASSWORD}@postgres:5432/anoifig
+      ANOIFIG_MIGRATION_DATABASE_URL: postgresql+psycopg://postgres:${POSTGRES_PASSWORD}@postgres:5432/anoifig
+    command: ["sh", "-c", "uv run --no-sync alembic upgrade head && uv run --no-sync python scripts/grant_runtime.py"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    build:
+      context: .
+      target: runtime
+    environment:
+      ANOIFIG_ENVIRONMENT: development
+      ANOIFIG_DATABASE_URL: postgresql+psycopg://anoifig_app:${ANOIFIG_APP_PASSWORD}@postgres:5432/anoifig
+      ANOIFIG_OIDC_ISSUER: ${ANOIFIG_OIDC_ISSUER:-}
+      ANOIFIG_OIDC_AUDIENCE: ${ANOIFIG_OIDC_AUDIENCE:-}
+      ANOIFIG_OIDC_JWKS_URL: ${ANOIFIG_OIDC_JWKS_URL:-}
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "from urllib.request import urlopen; urlopen('http://127.0.0.1:8000/health/ready', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  tests:
+    profiles: [test]
+    build:
+      context: .
+      target: development
+    environment:
+      ANOIFIG_ENVIRONMENT: test
+      ANOIFIG_TEST_DATABASE_URL: postgresql+psycopg://anoifig_app:${ANOIFIG_APP_PASSWORD}@postgres:5432/anoifig_test
+      ANOIFIG_TEST_ADMIN_DATABASE_URL: postgresql+psycopg://postgres:${POSTGRES_PASSWORD}@postgres:5432/anoifig_test
+    command: ["uv", "run", "--no-sync", "pytest", "-ra"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+volumes:
+  postgres_data:

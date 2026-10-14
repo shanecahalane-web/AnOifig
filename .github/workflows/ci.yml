@@ -1,0 +1,63 @@
+name: Backend checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17-bookworm
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ci-only-owner-password
+          POSTGRES_DB: anoifig
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d anoifig"
+          --health-interval 3s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      ANOIFIG_ENVIRONMENT: test
+      ANOIFIG_APP_PASSWORD: ci-only-app-password
+      ANOIFIG_TEST_DATABASE_URL: postgresql+psycopg://anoifig_app:ci-only-app-password@127.0.0.1:5432/anoifig_test
+      ANOIFIG_TEST_ADMIN_DATABASE_URL: postgresql+psycopg://postgres:ci-only-owner-password@127.0.0.1:5432/anoifig_test
+      PGHOST: 127.0.0.1
+      PGPASSWORD: ci-only-owner-password
+      POSTGRES_USER: postgres
+      POSTGRES_DB: anoifig
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.12.23"
+          enable-cache: true
+      - name: Install Python and locked dependencies
+        run: |
+          uv python install 3.13
+          uv sync --frozen
+      - name: Initialise disposable database and restricted runtime role
+        run: sh scripts/postgres/init-postgres.sh
+      - name: Lint
+        run: uv run --frozen ruff check .
+      - name: Check formatting
+        run: uv run --frozen ruff format --check .
+      - name: Type check
+        run: uv run --frozen mypy src
+      - name: Unit and PostgreSQL isolation tests
+        run: uv run --frozen pytest -ra
+      - name: Audit locked dependencies against OSV advisories
+        run: uv audit --locked
