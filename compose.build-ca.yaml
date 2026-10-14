@@ -1,0 +1,16 @@
+# Optional override for a development network with an approved custom CA bundle.
+# The bundle is a BuildKit secret and is not persisted in the container image.
+services:
+  migrate:
+    build:
+      secrets: [build_ca]
+  api:
+    build:
+      secrets: [build_ca]
+  tests:
+    build:
+      secrets: [build_ca]
+
+secrets:
+  build_ca:
+    file: ${ANOIFIG_BUILD_CA_FILE:?Set the path to an approved complete PEM CA bundle}
