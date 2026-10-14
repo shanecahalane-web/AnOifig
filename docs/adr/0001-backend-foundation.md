@@ -28,9 +28,11 @@ Use SQLAlchemy 2 and reviewed Alembic migrations. Application startup never
 creates tables or applies migrations. Local Compose runs migration/grant setup
 as a separate one-shot service, and the API waits for success. Production
 migrations must run through an explicitly reviewed release operation with a
-separate owner role. Docker uses a non-root API user. `uv.lock` makes dependency
-resolution reproducible; development and production share the locked runtime
-dependencies, with developer tools excluded from the runtime image.
+separate owner role. Docker uses a non-root API user. `uv.lock` fixes application
+dependency resolution; development and production share the locked runtime
+dependencies, with developer tools excluded from the runtime image. Isolated
+build dependencies and mutable image/action references remain open
+[technical debt](../technical-debt.md); they are not covered by that lock.
 
 CI uses PostgreSQL 17 with separate owner and application identities. Unit tests
 exercise pure behaviour; integration tests apply actual migrations and policies.

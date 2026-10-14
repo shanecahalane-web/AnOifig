@@ -1,4 +1,4 @@
-"""External OIDC verification. No local identity or password shortcut exists."""
+"""Verify the API's RFC 9068 JWT access-token contract against trusted OIDC keys."""
 
 from dataclasses import dataclass
 from typing import Protocol
@@ -51,6 +51,7 @@ class OIDCTokenVerifier:
             header = jwt.get_unverified_header(token)
             if (
                 header.get("alg") != "RS256"
+                or header.get("typ") not in ("at+jwt", "application/at+jwt")
                 or not isinstance(header.get("kid"), str)
                 or not 1 <= len(header["kid"]) <= 256
                 or "crit" in header
@@ -67,13 +68,22 @@ class OIDCTokenVerifier:
                 issuer=self.issuer,
                 audience=self.audience,
                 options={
-                    "require": ["exp", "iat", "iss", "aud", "sub"],
+                    "require": ["exp", "iat", "iss", "aud", "sub", "client_id", "jti"],
                     "strict_aud": True,
                 },
             )
-            subject = claims["sub"]
-            if not isinstance(subject, str) or not subject.strip() or len(subject) > 255:
+            # Check purpose claims only after verifying the signature. A matching
+            # issuer/audience alone must not allow an ID or refresh token to be
+            # substituted for the API's explicitly typed access-token profile.
+            if claims.get("token_use", "access") != "access" or any(
+                claim in claims for claim in ("nonce", "at_hash", "c_hash")
+            ):
                 raise InvalidToken
+            for claim in ("sub", "client_id", "jti"):
+                value = claims[claim]
+                if not isinstance(value, str) or not value.strip() or len(value) > 255:
+                    raise InvalidToken
+            subject = claims["sub"]
             return VerifiedIdentity(issuer=self.issuer, subject=subject)
         except jwt.PyJWKClientConnectionError:
             raise AuthenticationUnavailable from None

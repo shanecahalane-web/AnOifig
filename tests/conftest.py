@@ -161,9 +161,13 @@ def bearer(signing_key: rsa.RSAPrivateKey):
             "sub": subject,
             "iat": now,
             "exp": now + timedelta(minutes=5),
+            "client_id": "anoifig-test-client",
+            "jti": str(uuid4()),
             **overrides,
         }
-        token = jwt.encode(claims, signing_key, algorithm="RS256", headers={"kid": "test-key"})
+        token = jwt.encode(
+            claims, signing_key, algorithm="RS256", headers={"kid": "test-key", "typ": "at+jwt"}
+        )
         return {"Authorization": f"Bearer {token}"}
 
     return make

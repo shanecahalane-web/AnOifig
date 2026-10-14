@@ -84,12 +84,24 @@ production configuration requires HTTPS OIDC endpoints and PostgreSQL
 `sslmode=verify-full` with an explicit CA certificate path.
 
 Configure `ANOIFIG_OIDC_ISSUER`, `ANOIFIG_OIDC_AUDIENCE`, and
-`ANOIFIG_OIDC_JWKS_URL` together for an approved identity provider. JWTs must carry
-a valid signature and the configured issuer/audience/lifetime. A trusted
-provisioning operator must create the business, local user mapped to the exact
+`ANOIFIG_OIDC_JWKS_URL` together for an approved identity provider. The API accepts
+the strict access-token profile in [ADR 0002](docs/adr/0002-identity-and-tenant-isolation.md):
+RS256 signatures from the configured JWKS, protected `typ` of `at+jwt` or
+`application/at+jwt`, the exact issuer and a single dedicated API audience,
+and required `exp`, `iat`, `sub`, `client_id`, and `jti` claims. A signed
+`token_use`, when present, must be `access`; ID-token-only claims are rejected.
+ID tokens, refresh tokens, and generic JWTs are not accepted as API credentials.
+A trusted provisioning operator must create the business, local user mapped to the exact
 issuer/subject, and active membership before that user can access a tenant. The
 runtime role cannot provision or modify those records. See
 [the security decision](docs/adr/0002-identity-and-tenant-isolation.md).
+
+No identity provider has been selected or approved. Deployment must verify that
+its access tokens meet this contract, configure a separate API audience and
+approved client/grant/scope policies, and validate MFA, signing-key rotation,
+revocation and session lifetimes. Providers with a different token format require
+a separately reviewed adapter; there is no permissive fallback. `jti` is an
+identifier and does not by itself prevent bearer-token replay.
 
 Initial authenticated routes are:
 
@@ -111,6 +123,12 @@ within the trusted application boundary. A holder of arbitrary SQL access with
 the runtime credentials can set that application's transaction context; RLS is
 not a defence against a compromised application/database credential. Protect the
 runtime credentials and limit database network access.
+
+Runtime checks also reject unexpected database privileges, including `TRUNCATE`,
+which bypasses row policies. The grant helper fails before changing grants when
+it detects excess privileges; it adds only missing approved permissions and
+verifies the result in one transaction. Review and repair privilege drift using
+[the database runbook](docs/runbooks/database.md), rather than bypassing the checks.
 
 ## Automated checks
 
@@ -170,6 +188,19 @@ with restore tests. Production database roles, network/TLS controls, and staging
 deployment require review. The blueprint's staging deployment and broader
 hardening exit criteria are deferred because this task authorises local
 development and CI without paid Azure resources.
+
+For **every** production application, migration, and grant-script process,
+explicitly set `ANOIFIG_ENVIRONMENT=production` and supply the appropriate private
+database URL. All three paths require `postgresql+psycopg`, a single TCP hostname,
+`sslmode=verify-full`, and an explicit trusted `sslrootcert` path; they also verify
+that the established PostgreSQL session uses TLS. Mount the CA in each process's
+filesystem. Plain local example URLs are intentionally unsuitable for production.
+See [ADR 0003](docs/adr/0003-production-database-tls.md) and the runbook for the
+release requirements; migration/grant commands do not load `.env` themselves.
+
+The four low-severity review findings remain open in the
+[technical debt register](docs/technical-debt.md), with completion criteria and
+target gates. Passing the current test suite does not close those items.
 
 Twilio/OpenAI accounts, invoice issuance and Irish tax/privacy review remain later
 milestones. Work through reviewed branches and pull requests; do not merge or

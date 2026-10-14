@@ -1,13 +1,12 @@
 """Typed, secret-safe process configuration."""
 
 from functools import lru_cache
-from typing import Literal
 from urllib.parse import urlsplit
 
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from sqlalchemy.engine import make_url
-from sqlalchemy.exc import ArgumentError
+
+from anoifig.db.connection_config import Environment, validate_database_url
 
 
 class Settings(BaseSettings):
@@ -19,7 +18,7 @@ class Settings(BaseSettings):
         hide_input_in_errors=True,
     )
 
-    environment: Literal["development", "test", "production"] = "development"
+    environment: Environment = "development"
     database_url: SecretStr
     oidc_issuer: str | None = None
     oidc_audience: str | None = None
@@ -33,12 +32,7 @@ class Settings(BaseSettings):
     @field_validator("database_url")
     @classmethod
     def validate_database_url(cls, value: SecretStr) -> SecretStr:
-        try:
-            url = make_url(value.get_secret_value())
-        except ArgumentError:
-            raise ValueError("database_url must be a valid PostgreSQL connection URL") from None
-        if url.drivername != "postgresql+psycopg" or not url.database:
-            raise ValueError("database_url requires postgresql+psycopg and a database name")
+        validate_database_url(value.get_secret_value(), "development")
         return value
 
     @field_validator("oidc_issuer", "oidc_audience", "oidc_jwks_url")
@@ -52,6 +46,7 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_oidc_and_production(self) -> "Settings":
+        validate_database_url(self.database_url.get_secret_value(), self.environment)
         oidc_values = (self.oidc_issuer, self.oidc_audience, self.oidc_jwks_url)
         if any(oidc_values) and not all(oidc_values):
             raise ValueError("configure issuer, audience, and JWKS URL together")
@@ -74,19 +69,8 @@ class Settings(BaseSettings):
                 raise ValueError("production OIDC endpoints require HTTPS")
         if self.oidc_issuer is not None and len(self.oidc_issuer) > 512:
             raise ValueError("OIDC issuer exceeds the supported identity length")
-        if self.environment == "production":
-            if not all(oidc_values):
-                raise ValueError("production requires managed OIDC configuration")
-            database = make_url(self.database_url.get_secret_value())
-            query = database.query
-            if query.get("sslmode") != "verify-full" or not query.get("sslrootcert"):
-                raise ValueError("production PostgreSQL requires verify-full TLS and sslrootcert")
-            if (
-                not database.host
-                or database.host.startswith("/")
-                or any(key in query for key in ("host", "hostaddr", "service"))
-            ):
-                raise ValueError("production PostgreSQL requires an explicit TLS hostname")
+        if self.environment == "production" and not all(oidc_values):
+            raise ValueError("production requires managed OIDC configuration")
         return self
 
 
