@@ -8,6 +8,8 @@ export const metadata: Metadata = {
   },
   description:
     "Meet Tara, the WhatsApp administrative assistant being built for Irish tradespeople. Explore invoice drafting and approval in our interactive demonstration.",
+  // Suppress the browser’s missing-favicon request until an approved brand asset exists.
+  icons: { icon: "data:," },
   robots: { index: true, follow: true },
   openGraph: {
     title: "An Oifig — Your office, in your pocket.",

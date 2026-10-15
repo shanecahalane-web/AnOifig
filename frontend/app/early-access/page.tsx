@@ -11,13 +11,13 @@ export default function Page() {
           <em>More possibility.</em>
         </h1>
         <p>
-          We’re building Tara around the people who’ll use it. Tell us a little
-          about your trade and the paperwork you’d most like a hand with.
+          We’re building Tara around the people who’ll use it. Explore a
+          straightforward signup experience designed for your trade.
         </p>
         <p>
-          Early access is not open yet. Prepare a local interest draft here;
-          online registration will follow once our signup service and privacy
-          information are ready.
+          Real signup is not open yet. Try the form with sample details; nothing
+          will be sent or saved. We’ll connect registration only after the
+          secure service and privacy policies are ready.
         </p>
         <span className="pill">NO PAYMENT DETAILS · NO COMMITMENT</span>
       </div>

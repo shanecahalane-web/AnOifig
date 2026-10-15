@@ -30,9 +30,10 @@ export default function Legal({ terms = false }: { terms?: boolean }) {
           </p>
           <h2>Your control</h2>
           <p>
-            Approval is simulated in browser memory only. Forms download a local
-            file; they do not submit information, create an account or establish
-            a contract.
+            Approval is simulated in browser memory only. Forms simulate
+            submission only; no information is transmitted or persisted, no
+            account is created and no contract is established. Sample PDFs use
+            fictional details and are not tax invoices.
           </p>
           <h2>Before publication</h2>
           <p>
@@ -48,14 +49,17 @@ export default function Legal({ terms = false }: { terms?: boolean }) {
           <h2>Information in this preview</h2>
           <p>
             The demonstration uses fictional data in your browser. Form details
-            are held in the current page and used only to create a file you
-            download. No submission, registration, analytics or advertising
-            service is connected by this application.
+            are held temporarily in the current page for validation and a mock
+            submission, then cleared when the mock completes. They are not
+            transmitted or stored. Use fictional details. No submission,
+            registration, analytics or advertising service is connected by this
+            application.
           </p>
           <h2>Local files and hosting</h2>
           <p>
-            Downloaded files contain what you enter. Keep or delete these files
-            as you would any personal document. Hosting providers may process
+            Sample PDFs contain only the fixed fictional invoice details and the
+            sample amount selected in the demo. Signup and contact information
+            is never included in a download. Hosting providers may process
             technical request information such as IP addresses; provider,
             retention and processing arrangements must be confirmed before
             publication.

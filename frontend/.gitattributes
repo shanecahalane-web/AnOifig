@@ -1,0 +1,2 @@
+# Generated sample documents are binary artifacts even when their PDF stream is ASCII.
+*.pdf binary

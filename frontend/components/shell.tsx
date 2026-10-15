@@ -1,9 +1,23 @@
 "use client";
 import Link from "next/link";
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { ArrowUpRight, Menu, X } from "lucide-react";
+// Official logo integration points: Header and Footer .brand links.
+// Keep the existing text branding until the approved asset is supplied.
 export function Header() {
   const [open, setOpen] = useState(false);
+  const menuButton = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setOpen(false);
+        menuButton.current?.focus();
+      }
+    };
+    document.addEventListener("keydown", close);
+    return () => document.removeEventListener("keydown", close);
+  }, [open]);
   return (
     <header className="header">
       <div className="nav-wrap">
@@ -11,6 +25,7 @@ export function Header() {
           An Oifig<span className="brand-period">.</span>
         </Link>
         <button
+          ref={menuButton}
           className="menu-button"
           aria-label={open ? "Close navigation" : "Open navigation"}
           aria-expanded={open}

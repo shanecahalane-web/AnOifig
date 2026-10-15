@@ -15,9 +15,10 @@ export default function Page() {
           make room for both.
         </p>
         <p>
-          This preview has no connected inbox or verified contact address.
-          Prepare and save your enquiry locally. A direct contact channel will
-          be added before launch.
+          This preview has no connected inbox or verified contact address. Try
+          the form with fictional details to see the planned experience. Nothing
+          is sent or stored. A verified contact channel will be added before
+          launch.
         </p>
       </div>
       <EnquiryForm contact />
