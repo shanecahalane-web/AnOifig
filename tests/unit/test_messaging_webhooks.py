@@ -59,6 +59,16 @@ def test_valid_signature_includes_exact_configured_url_query_and_all_parameters(
     )
 
 
+@pytest.mark.parametrize("port", [443, 8443])
+def test_sdk_accepts_portless_signature_for_configured_port(port: int) -> None:
+    # This documented SDK compatibility is not a port-isolation guarantee.
+    configured_url = PUBLIC_URL.replace("api.example.test", f"api.example.test:{port}")
+    signature = RequestValidator(TOKEN).compute_signature(PUBLIC_URL, FORM)
+    assert verify_signature(
+        public_url=configured_url, parameters=FORM, signature=signature, auth_token=TOKEN
+    )
+
+
 @pytest.mark.parametrize(
     "public_url,parameters,token",
     [

@@ -43,12 +43,24 @@ Milestone 2 extends the Milestone 1 allowlist. Approved permissions are:
 
 Runtime EXECUTE is limited to the exact gateway signatures
 `messaging_route_phone(text)`, `messaging_redeem_phone(text,text)`,
-`messaging_lookup_job(uuid)`, `messaging_discover_jobs(integer)` and
-`messaging_park_job(uuid)`. These expose minimal routing/work metadata or consume
+`messaging_lookup_job(uuid)`, `messaging_discover_jobs(integer)`,
+`messaging_park_job(uuid)`, `messaging_claim_jobs(integer)` and
+`messaging_release_job(uuid,uuid,integer)`. These expose minimal routing/work metadata or consume
 an existing challenge; tenant content still requires active authorisation and
 ordinary RLS context. Reviewed source-table triggers maintain `message_jobs`.
 The worker can park its operational index after revocation without changing
 inaccessible tenant content. See [ADR 0004](../adr/0004-whatsapp-messaging.md).
+
+For a database already on Milestone 2 revision `0002_whatsapp_messaging`, stop
+API/worker processes and run the existing owner-only Alembic upgrade and grant
+commands before starting the new runtime. Revision `0003_messaging_queue_claims`
+adds operational claim fields/indexes and reviewed metadata-only gateways in
+place; it preserves existing links, messages, outboxes and pending work. Do not
+reset the database or edit an applied migration to install this update. Runtime
+code requires the new grants and fails closed if they are missing. Downgrading
+0003 removes claim coordination but preserves source messaging records; pause
+workers before any reviewed rollback. All earlier TLS/owner separation rules
+still apply to upgrade, grant and rollback commands.
 
 The gateway functions and privileged indexing helpers require the metadata owner,
 SECURITY DEFINER and fixed `search_path=pg_catalog`. PUBLIC EXECUTE and runtime

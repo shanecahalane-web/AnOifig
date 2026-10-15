@@ -31,6 +31,8 @@ RUNTIME_FUNCTIONS = frozenset(
         "messaging_redeem_phone(text,text)",
         "messaging_lookup_job(uuid)",
         "messaging_discover_jobs(integer)",
+        "messaging_claim_jobs(integer)",
+        "messaging_release_job(uuid,uuid,integer)",
         "messaging_park_job(uuid)",
     }
 )

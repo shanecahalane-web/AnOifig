@@ -33,6 +33,11 @@ Invalid signatures and unknown/unverified senders receive generic rejection.
 Malformed or repeated form fields are rejected without including input in errors.
 Production requires HTTPS. Twilio-disabled startup fails closed at these routes.
 
+The Twilio SDK deliberately accepts URL signatures with and without an explicit
+port. The configured scheme, host, path, query and submitted parameters remain
+authoritative; port differences cannot isolate services sharing a Twilio token.
+Use separate credentials and origins for independently trusted environments.
+
 An authenticated active `owner` or `staff` member requests a link for their own
 account and a specific E.164 phone through the tenant API. Return a cryptographic
 single-use token with a ten-minute lifetime, persist only its hash, and redeem it
@@ -74,6 +79,15 @@ worker locks/rechecks state and creates at most one reply and outbox entry per
 inbound message in one transaction. A polling queue can rediscover committed
 work after process failure; an in-memory queue is not the durable boundary.
 
+Migration 0003 adds content-free operational claims without rewriting migration
+0002 or discarding accepted messages. Claims select ready, due jobs atomically
+with `FOR UPDATE SKIP LOCKED`, ordered by least recent claim and then due time
+and UUID. Each receives an opaque receipt and a two-minute lease. Receipt-bound
+settlement cannot release another worker's claim. Contended work is abandoned
+with a short cooldown; a batch that settles no work delays the polling loop.
+Expired claims become available after a crash. Source row locks, current
+authorisation and idempotency remain mandatory even with a valid claim.
+
 Dispatch records the outbox correlation ID, attempt count and state before
 calling Twilio.
 Commit the send result/SID separately, reconcile signed status callbacks against
@@ -91,6 +105,13 @@ callback can reconcile the attempt; unresolved uncertainty requires operator
 review. Local database processing failures can retry safely within bounds;
 exhausted work and errors remain persisted for investigation. This guarantees
 idempotent local actions, not exactly-once customer delivery across systems.
+
+A valid late successful send response may reconcile `uncertain` for the same
+persisted attempt number. Lock the outbox and message, recheck the linked
+identity, and advance status monotonically. A bound provider SID cannot be
+replaced; conflicting or globally duplicated SIDs are recorded without replay.
+Newer callback delivery/error progress is preserved. Failed late responses do
+not reopen recovered work, and stale responses cannot change a newer attempt.
 
 ### Future Service Bus adapter
 

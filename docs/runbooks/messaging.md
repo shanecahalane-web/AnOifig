@@ -73,6 +73,11 @@ or untrusted forwarding headers. Configure a stable approved public HTTPS URL
 before any actual sandbox/staging smoke test; local loopback alone cannot be
 reached by Twilio. There is no automatic tunnel or cloud resource creation.
 
+Twilio's SDK accepts signatures over URL variants with and without explicit
+ports, including when a non-default port is configured. Do not use ports as a
+trust boundary for services sharing one auth token. Preserve the configured
+scheme, hostname, path and query, and separate credentials between environments.
+
 Requests require `application/x-www-form-urlencoded`. Inbound fields include
 `AccountSid`, `MessageSid`, `From`, `To`, `Body` and `NumMedia=0`. Text must be
 nonblank and within the supported 1,600-character limit. Media and interactive
@@ -140,6 +145,13 @@ replay or concurrent delivery from creating another accepted action. Replays do
 not refresh the WhatsApp window. The worker commits reply/outbox creation before
 sending; a provider failure cannot lose the intent to send.
 
+Operational claims last two minutes and are separate from outbound dispatch
+leases. Claims use opaque, receipt-bound settlement and least-recently-claimed
+ordering, so locked older source rows cannot repeatedly displace later work.
+Source contention defers the claim briefly; an entire batch without progress
+causes a one-second polling delay. After a worker crash, expired claims can be
+rediscovered. Their receipt is coordination metadata, never tenant authority.
+
 Outbox states distinguish pending/retry work, dispatch in progress, sent,
 blocked, failed and uncertain outcomes. Processing errors are bounded codes;
 retain these for diagnosis without dumping payloads or provider exceptions.
@@ -166,6 +178,11 @@ a separately reviewed action. A callback may resolve uncertainty, but absence of
 a callback never proves that nothing was sent. Avoid restoring an old backup and
 blindly replaying its outbox without provider reconciliation.
 
+A valid successful response arriving after dispatch-lease recovery can retain
+its SID and reconcile `uncertain` for that same attempt. It cannot regress a
+newer delivery callback or replace an existing SID. Inspect `provider_sid_mismatch`
+and `provider_sid_conflict` diagnostics; do not clear them by replaying the send.
+
 The free-form WhatsApp window is 24 hours after the accepted inbound message and
 is rechecked at dispatch. Approved templates and opt-in/template management are
 not implemented. Do not send free-form text outside the window. Delivery states
@@ -188,6 +205,13 @@ linking/revocation, signed/invalid requests, replay/concurrency, message/outbox
 persistence, callbacks, provider failures and retry safety. Twilio API calls are
 mocked; no live credentials are used. Follow the database runbook for host test
 execution and approved custom CA configuration.
+
+Recovery tests include distinct simulated provider SIDs, concurrent messages
+across tenants, sustained source-row locking, expired/stale queue receipts,
+paused providers racing lease recovery and callbacks, and actual child-process
+termination/restart. A test-only local provider journals acceptance before
+termination; a separate test commits acceptance and then simulates loss of the
+commit acknowledgement. No production exit hooks or live Twilio calls are used.
 
 Review migration SQL and runtime grants together. Never use `create_all`, run
 migrations automatically in the API/worker, or fix RLS/grant failures by using

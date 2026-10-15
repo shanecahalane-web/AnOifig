@@ -39,13 +39,13 @@ class WorkQueue(Protocol):
 
 
 class PostgresWorkQueue:
-    """Discover durable ready/due work without a paid broker or in-memory state.
+    """Claim durable work using opaque receipts and bounded metadata leases.
 
-    Discovery grants no claim or tenant access: only opaque job IDs leave this
-    adapter. Concurrent workers can discover the same ID, so the domain handler
-    must lock and recheck the row within its processing transaction. Completing
-    or abandoning a local delivery needs no separate write: committed domain
-    state determines whether and when PostgreSQL discovers the work again.
+    Claims coordinate polling workers without granting tenant access. Domain
+    handlers still lock and recheck source state within their transaction.
+    Expired claims recover after a worker crash; settling an older receipt
+    cannot release a newer worker's delivery. Least-recently-claimed ordering
+    prevents busy source rows from starving later work.
     """
 
     def __init__(self, engine: Engine, settings: Settings) -> None:
@@ -59,14 +59,29 @@ class PostgresWorkQueue:
             check_runtime_database(
                 connection, require_tls=self._settings.environment == "production"
             )
-            job_ids = connection.execute(
-                text("SELECT job_id FROM public.messaging_discover_jobs(:limit)"),
+            deliveries = connection.execute(
+                text("SELECT job_id, receipt FROM public.messaging_claim_jobs(:limit)"),
                 {"limit": limit},
-            ).scalars()
-            return [QueueDelivery(id=UUID(str(job_id)), receipt=str(job_id)) for job_id in job_ids]
+            )
+            return [
+                QueueDelivery(id=UUID(str(row.job_id)), receipt=str(row.receipt))
+                for row in deliveries
+            ]
 
     def complete(self, delivery: QueueDelivery) -> None:
-        """Committed domain state already removes or reschedules local work."""
+        """Release this receipt after the domain transaction has committed."""
+        self._release(delivery, delay=0)
 
     def abandon(self, delivery: QueueDelivery) -> None:
-        """Uncommitted work remains durable and discoverable for another worker."""
+        """Release this receipt with a short cooldown for contended source rows."""
+        self._release(delivery, delay=1)
+
+    def _release(self, delivery: QueueDelivery, *, delay: int) -> None:
+        with self._engine.begin() as connection:
+            check_runtime_database(
+                connection, require_tls=self._settings.environment == "production"
+            )
+            connection.execute(
+                text("SELECT public.messaging_release_job(:job, :receipt, :delay)"),
+                {"job": delivery.id, "receipt": UUID(delivery.receipt), "delay": delay},
+            )

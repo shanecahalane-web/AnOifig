@@ -8,7 +8,7 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 from sqlalchemy import Engine, select, text
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from anoifig.config import Settings, get_settings
@@ -39,6 +39,7 @@ class SendCommand:
     to: str
     body: str
     callback: str
+    attempt_number: int
 
 
 class MessagingWorker:
@@ -60,59 +61,67 @@ class MessagingWorker:
 
     def run_once(self) -> int:
         deliveries = self.queue.receive()
+        progressed = 0
         for delivery in deliveries:
             try:
-                self.process_delivery(delivery.id)
+                changed = self.process_delivery(delivery.id)
             except SQLAlchemyError:
                 # Never print a driver/provider exception, its parameters or a DSN.
                 logger.warning("Messaging database operation unavailable")
                 self.queue.abandon(delivery)
             else:
-                # Settlement follows committed database effects. The database
-                # discovery implementation needs no separate acknowledgement.
-                self.queue.complete(delivery)
-        return len(deliveries)
+                # Settle this opaque claim only after the domain commit. Deferred
+                # work receives a short cooldown; a wholly deferred batch returns
+                # zero so the polling loop also backs off.
+                if changed:
+                    self.queue.complete(delivery)
+                    progressed += 1
+                else:
+                    self.queue.abandon(delivery)
+        return progressed
 
-    def process_delivery(self, job_id: UUID) -> None:
+    def process_delivery(self, job_id: UUID) -> bool:
+        """Return whether work was settled; defer only contention or future work."""
         try:
-            self._process_delivery(job_id)
+            return self._process_delivery(job_id)
         except AccessDenied:
             # Also covers revocation during the provider call or failure recording.
             # Revocation forbids writing content; only park operational metadata.
             with Session(self.engine) as session, session.begin():
                 self._check(session)
                 session.execute(text("SELECT public.messaging_park_job(:id)"), {"id": job_id})
+            return True
 
-    def _process_delivery(self, job_id: UUID) -> None:
+    def _process_delivery(self, job_id: UUID) -> bool:
         job: Job | None = None
         command: SendCommand | None = None
+        progressed = False
         try:
             with Session(self.engine) as session, session.begin():
                 self._check(session)
                 job = lookup_job(session, job_id)
                 if job is None:
-                    return
+                    return True  # A deleted/tombstoned job needs no broker retry.
                 authorise_route(session, job.route)
                 if job.kind == "inbound":
-                    self._process_inbound(session, job)
+                    progressed = self._process_inbound(session, job)
                 else:
-                    command = self._prepare_outbound(session, job)
+                    command, progressed = self._prepare_outbound(session, job)
         except AccessDenied:
             raise
         except SQLAlchemyError:
             if job is not None and job.kind == "inbound":
-                self._record_processing_failure(job)
-                return
+                return self._record_processing_failure(job)
             raise
         except Exception:
             if job is not None and job.kind == "inbound":
-                self._record_processing_failure(job)
-                return
+                return self._record_processing_failure(job)
             raise
         if command is not None:
             self._send(command)
+        return progressed
 
-    def _process_inbound(self, session: Session, job: Job) -> None:
+    def _process_inbound(self, session: Session, job: Job) -> bool:
         message = session.scalar(
             select(Message)
             .where(
@@ -123,8 +132,10 @@ class MessagingWorker:
             .with_for_update(skip_locked=True)
         )
         now = datetime.now(UTC)
-        if message is None or message.processed_at is not None or message.available_at > now:
-            return
+        if message is None or message.available_at > now:
+            return False
+        if message.processed_at is not None:
+            return True  # Settle a redelivery after the prior commit/ack was lost.
         # Message lock serialises at-least-once deliveries. The unique reply FK
         # also prevents a second logical response after a lost acknowledgement.
         existing = session.scalar(
@@ -160,8 +171,9 @@ class MessagingWorker:
         message.status = "processed"
         message.processing_attempts += 1
         message.processing_error = None
+        return True
 
-    def _record_processing_failure(self, job: Job) -> None:
+    def _record_processing_failure(self, job: Job) -> bool:
         with Session(self.engine) as session, session.begin():
             self._check(session)
             authorise_route(session, job.route)
@@ -173,8 +185,10 @@ class MessagingWorker:
                 )
                 .with_for_update()
             )
-            if message is None or message.processed_at is not None:
-                return
+            if message is None:
+                return False
+            if message.processed_at is not None:
+                return True
             message.processing_attempts += 1
             message.processing_error = "processing_failed"
             if message.processing_attempts >= MAX_ATTEMPTS:
@@ -184,8 +198,9 @@ class MessagingWorker:
                 message.available_at = datetime.now(UTC) + timedelta(
                     seconds=min(3600, 2**message.processing_attempts),
                 )
+            return True
 
-    def _prepare_outbound(self, session: Session, job: Job) -> SendCommand | None:
+    def _prepare_outbound(self, session: Session, job: Job) -> tuple[SendCommand | None, bool]:
         _, link = authorise_route(session, job.route)
         outbox = session.scalar(
             select(Outbox)
@@ -196,7 +211,7 @@ class MessagingWorker:
             .with_for_update(skip_locked=True)
         )
         if outbox is None:
-            return None
+            return None, False
         message = session.scalar(
             select(Message)
             .where(
@@ -215,9 +230,12 @@ class MessagingWorker:
                 message.status = "uncertain"
                 message.processing_error = "dispatch_interrupted"
                 outbox.lease_until = None
-            return None
-        if outbox.status not in {"pending", "retry"} or outbox.available_at > now:
-            return None
+                return None, True
+            return None, False
+        if outbox.status not in {"pending", "retry"}:
+            return None, True
+        if outbox.available_at > now:
+            return None, False
         conversation = session.scalar(
             select(Conversation).where(
                 Conversation.id == message.conversation_id,
@@ -232,26 +250,30 @@ class MessagingWorker:
             outbox.status = "blocked"
             message.status = "blocked"
             outbox.last_error = message.processing_error = "template_required"
-            return None
+            return None, True
         if outbox.attempts >= MAX_ATTEMPTS:
             outbox.status = "failed"
             message.status = "failed"
             outbox.last_error = message.processing_error = "retry_exhausted"
-            return None
+            return None, True
         outbox.status = "dispatching"
         outbox.attempts += 1
         outbox.dispatch_started_at = now
         outbox.lease_until = now + DISPATCH_LEASE
         outbox.last_error = None
-        return SendCommand(
-            job,
-            "whatsapp:" + link.phone,
-            message.body,
-            callback_url(
-                self.settings.twilio_status_url
-                or "https://simulator.invalid/webhooks/twilio/status",
-                outbox.id,
+        return (
+            SendCommand(
+                job,
+                "whatsapp:" + link.phone,
+                message.body,
+                callback_url(
+                    self.settings.twilio_status_url
+                    or "https://simulator.invalid/webhooks/twilio/status",
+                    outbox.id,
+                ),
+                outbox.attempts,
             ),
+            True,
         )
 
     def _dispatch_allowed(self, command: SendCommand) -> bool:
@@ -267,7 +289,11 @@ class MessagingWorker:
                 )
                 .with_for_update()
             )
-            if outbox is None or outbox.status != "dispatching":
+            if (
+                outbox is None
+                or outbox.status != "dispatching"
+                or outbox.attempts != command.attempt_number
+            ):
                 return False
             message = session.scalar(
                 select(Message).where(
@@ -327,8 +353,13 @@ class MessagingWorker:
                 )
                 .with_for_update()
             )
-            if outbox is None or outbox.status != "dispatching":
-                return  # A callback may already have confirmed provider acceptance.
+            if outbox is None or outbox.attempts != command.attempt_number:
+                return  # An older attempt cannot change a newer dispatch.
+            if isinstance(outcome, SendResult):
+                if outbox.status not in {"dispatching", "uncertain", "sent"}:
+                    return
+            elif outbox.status != "dispatching":
+                return  # A callback or recovery already resolved this attempt.
             message = session.scalar(
                 select(Message)
                 .where(
@@ -339,16 +370,8 @@ class MessagingWorker:
             )
             if message is None:
                 raise AccessDenied
-            outbox.lease_until = None
             if isinstance(outcome, SendResult):
-                if message.twilio_sid is not None and message.twilio_sid != outcome.sid:
-                    outbox.status = "uncertain"
-                    outbox.last_error = "provider_sid_mismatch"
-                else:
-                    message.twilio_sid = outcome.sid
-                    advance_status(message, outcome.status)
-                    outbox.status = "sent"
-                    outbox.last_error = None
+                self._reconcile_success(session, outbox, message, outcome)
             elif isinstance(outcome, SafeRetry):
                 outbox.status = "retry" if outbox.attempts < MAX_ATTEMPTS else "failed"
                 if outbox.status == "failed":
@@ -363,6 +386,51 @@ class MessagingWorker:
                 message.status = outbox.status
                 outbox.last_error = outcome.code
                 message.processing_error = outcome.code
+            outbox.lease_until = None
+
+    def _reconcile_success(
+        self,
+        session: Session,
+        outbox: Outbox,
+        message: Message,
+        outcome: SendResult,
+    ) -> None:
+        """Persist acceptance even if recovery raced the provider response.
+
+        The caller holds the outbox/message locks and has revalidated the linked
+        identity and attempt generation. Callback progress always wins over a
+        lower send-response status, and a bound provider SID is immutable.
+        """
+        if message.twilio_sid is not None and message.twilio_sid != outcome.sid:
+            self._quarantine_sid(outbox, message, "provider_sid_mismatch")
+            return
+        if message.twilio_sid is None:
+            try:
+                # The unique SID constraint covers every tenant. Its savepoint
+                # also detects collisions hidden by RLS without exposing them.
+                with session.begin_nested():
+                    message.twilio_sid = outcome.sid
+                    session.flush()
+            except IntegrityError as error:
+                constraint = getattr(getattr(error.orig, "diag", None), "constraint_name", None)
+                if constraint != "uq_messages_twilio_sid":
+                    raise
+                self._quarantine_sid(outbox, message, "provider_sid_conflict")
+                return
+        advance_status(message, outcome.status)
+        outbox.status = "sent"
+        outbox.last_error = None
+
+    @staticmethod
+    def _quarantine_sid(outbox: Outbox, message: Message, error_code: str) -> None:
+        # Keep newer callbacks' accepted/delivered/read state intact. A conflict
+        # records a diagnostic and never starts another customer-visible send.
+        if outbox.status != "sent":
+            outbox.status = "uncertain"
+            if message.status in {"pending", "uncertain"}:
+                message.status = "uncertain"
+                message.processing_error = error_code
+        outbox.last_error = error_code
 
 
 def main() -> None:

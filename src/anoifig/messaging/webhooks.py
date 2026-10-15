@@ -77,7 +77,7 @@ def parse_form(content_type: str | None, body: bytes) -> dict[str, str]:
 def verify_signature(
     *, public_url: str, parameters: Mapping[str, str], signature: str | None, auth_token: str
 ) -> bool:
-    """Use Twilio's maintained validator against the exact configured URL."""
+    """Validate the configured public URL with Twilio's port compatibility rules."""
     if signature is None or len(signature) != 28 or not auth_token:
         return False
     try:

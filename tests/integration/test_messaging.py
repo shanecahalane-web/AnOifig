@@ -7,8 +7,10 @@ through the real adapters.
 
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from threading import Barrier, Event, Lock
 from urllib.parse import parse_qs, urlencode, urlsplit
 from uuid import UUID, uuid4
 
@@ -45,13 +47,18 @@ TARA_RESPONSE = (
 class FakeProvider:
     failures: list[Exception] = field(default_factory=list)
     calls: list[dict[str, str]] = field(default_factory=list)
-    sid: str = "SM" + "f" * 32
+    accepted_sids: list[str] = field(default_factory=list)
+    sid: str | None = None
+    _lock: Lock = field(default_factory=Lock, repr=False)
 
     def send_text(self, *, to: str, body: str, callback_url: str) -> SendResult:
-        self.calls.append({"to": to, "body": body, "callback_url": callback_url})
-        if self.failures:
-            raise self.failures.pop(0)
-        return SendResult(sid=self.sid, status="queued")
+        with self._lock:
+            self.calls.append({"to": to, "body": body, "callback_url": callback_url})
+            if self.failures:
+                raise self.failures.pop(0)
+            self.sid = "SM" + uuid4().hex
+            self.accepted_sids.append(self.sid)
+            return SendResult(sid=self.sid, status="queued")
 
 
 @pytest.fixture
@@ -164,6 +171,47 @@ def set_context(connection, seed, *, tenant="a", subject="owner-a"):
         ),
         {"issuer": ISSUER, "subject": subject, "tenant": str(seed.businesses[tenant])},
     )
+
+
+@contextmanager
+def paused_provider_send(worker, provider, monkeypatch, job_id) -> Iterator[SendResult]:
+    """Pause after provider acceptance, outside the worker's DB transactions."""
+    accepted, release = Event(), Event()
+    results = []
+    original_send = provider.send_text
+
+    def accept_then_pause(**kwargs):
+        result = original_send(**kwargs)
+        results.append(result)
+        accepted.set()
+        assert release.wait(timeout=30), "Test did not release the provider response"
+        return result
+
+    with monkeypatch.context() as patch, ThreadPoolExecutor(max_workers=1) as executor:
+        patch.setattr(provider, "send_text", accept_then_pause)
+        future = executor.submit(worker.process_delivery, job_id)
+        try:
+            assert accepted.wait(timeout=30), "Worker never reached provider acceptance"
+            yield results[0]
+        finally:
+            release.set()
+            future.result(timeout=30)
+
+
+def expire_and_recover_dispatch(database, worker, outbox_id):
+    with database.admin.begin() as connection:
+        connection.execute(
+            text("UPDATE outbox SET lease_until = now() - interval '1 second' WHERE id = :id"),
+            {"id": outbox_id},
+        )
+    # A second process sees only durable state, not the paused provider response.
+    recovery_worker = MessagingWorker(worker.engine, worker.settings, worker.provider)
+    recovery_worker.process_delivery(outbox_id)
+    recovered = rows(database, "outbox", "WHERE id = :id", {"id": outbox_id})[0]
+    assert recovered["status"] == "uncertain"
+    assert recovered["attempts"] == 1
+    assert recovered["last_error"] == "dispatch_interrupted"
+    assert recovered["lease_until"] is None
 
 
 def test_link_requires_oidc_writer_and_selected_tenant(messaging_client, seed, bearer):
@@ -424,6 +472,8 @@ def test_provider_rate_limit_retries_only_after_delay_and_reuses_outbox(
     assert failed["attempts"] == 1
     assert failed["available_at"] > datetime.now(UTC)
     assert failed["last_error"] is not None
+    assert provider.sid is None
+    assert provider.accepted_sids == []
     drain(worker)
     assert len(provider.calls) == 1
     with database.admin.begin() as connection:
@@ -433,6 +483,7 @@ def test_provider_rate_limit_retries_only_after_delay_and_reuses_outbox(
     assert retried["id"] == failed["id"]
     assert retried["status"] == "sent"
     assert retried["attempts"] == 2
+    assert provider.accepted_sids == [provider.sid]
     assert len(provider.calls) == 2
     assert provider.calls[0] == provider.calls[1]
     assert len(rows(database, "messages")) == 2
@@ -518,13 +569,16 @@ def test_callback_reconciles_ambiguous_send_without_resending(
     assert signed_post(messaging_client, inbound_form()).status_code == 200
     drain(worker)
     callback_url = provider.calls[0]["callback_url"]
-    form = {"AccountSid": ACCOUNT_SID, "MessageSid": provider.sid, "MessageStatus": "delivered"}
+    callback_sid = "SM" + uuid4().hex
+    assert provider.sid is None
+    assert provider.accepted_sids == []
+    form = {"AccountSid": ACCOUNT_SID, "MessageSid": callback_sid, "MessageStatus": "delivered"}
     assert signed_post(messaging_client, form, public_url=callback_url).status_code == 204
     drain(worker)
     assert rows(database, "outbox")[0]["status"] == "sent"
     outgoing = rows(database, "messages", "WHERE direction = 'outbound'")[0]
     assert outgoing["status"] == "delivered"
-    assert outgoing["twilio_sid"] == provider.sid
+    assert outgoing["twilio_sid"] == callback_sid
     assert len(provider.calls) == 1
 
 
@@ -742,6 +796,10 @@ def test_provider_acceptance_followed_by_database_failure_is_not_resent(
     assert interrupted["attempts"] == 1
     with database.admin.begin() as connection:
         connection.execute(text("UPDATE outbox SET lease_until = now() - interval '1 second'"))
+        # Recovery waits for both the dispatch lease and the polling cooldown.
+        connection.execute(
+            text("UPDATE message_jobs SET claim_until = now() - interval '1 second'")
+        )
     drain(worker)
     recovered = rows(database, "outbox")[0]
     assert recovered["status"] == "uncertain"
@@ -853,3 +911,293 @@ def test_worker_rechecks_authority_window_and_lease_immediately_before_provider_
     else:
         job = rows(database, "message_jobs", "WHERE id = :id", {"id": outbox["id"]})[0]
         assert job["ready"] is False
+
+
+def test_concurrent_messages_and_callbacks_remain_distinct_and_tenant_isolated(
+    messaging_client, database, seed, bearer, worker, provider
+):
+    per_tenant = 8
+    forms = []
+    for tenant, subject, phone in (("a", "owner-a", PHONE), ("b", "owner-b", OTHER_PHONE)):
+        verify_link(messaging_client, seed, bearer, tenant=tenant, subject=subject, phone=phone)
+        forms.extend(inbound_form(phone=phone, body=f"Message {i}") for i in range(per_tenant))
+    with ThreadPoolExecutor(max_workers=6) as executor:
+        responses = list(executor.map(lambda form: signed_post(messaging_client, form), forms))
+        assert [response.status_code for response in responses] == [200] * len(forms)
+        inbound_ids = [message["id"] for message in rows(database, "messages")]
+        list(executor.map(worker.process_delivery, inbound_ids * 2))
+        outboxes = rows(database, "outbox")
+        assert len(outboxes) == len(forms)
+        list(executor.map(worker.process_delivery, [outbox["id"] for outbox in outboxes] * 2))
+    drain(worker)
+    outgoing = rows(database, "messages", "WHERE direction = 'outbound'")
+    assert len(outgoing) == len(forms)
+    assert len(provider.calls) == len(forms)
+    assert len(provider.accepted_sids) == len(set(provider.accepted_sids)) == len(forms)
+    assert {message["twilio_sid"] for message in outgoing} == set(provider.accepted_sids)
+    assert provider.sid == provider.accepted_sids[-1]
+    by_id = {message["id"]: message for message in outgoing}
+    callbacks = [
+        (
+            STATUS_URL + "?attempt_id=" + str(outbox["id"]),
+            {
+                "AccountSid": ACCOUNT_SID,
+                "MessageSid": by_id[outbox["message_id"]]["twilio_sid"],
+                "MessageStatus": status,
+            },
+        )
+        for outbox in outboxes
+        for status in ("read", "queued", "delivered", "read")
+    ]
+
+    def post_callback(callback):
+        url, form = callback
+        return signed_post(messaging_client, form, public_url=url).status_code
+
+    with ThreadPoolExecutor(max_workers=6) as executor:
+        assert list(executor.map(post_callback, callbacks)) == [204] * len(callbacks)
+    assert {
+        message["status"] for message in rows(database, "messages", "WHERE direction = 'outbound'")
+    } == {"read"}
+    assert {outbox["status"] for outbox in rows(database, "outbox")} == {"sent"}
+    for tenant, subject in (("a", "owner-a"), ("b", "owner-b")):
+        with database.runtime.begin() as connection:
+            assert connection.execute(text("SELECT id FROM messages")).all() == []
+            set_context(connection, seed, tenant=tenant, subject=subject)
+            visible = connection.execute(text("SELECT tenant_id FROM messages")).scalars().all()
+            assert visible == [seed.businesses[tenant]] * (per_tenant * 2)
+            for table in ("phone_links", "conversations", "outbox"):
+                assert set(
+                    connection.execute(text(f"SELECT tenant_id FROM {table}")).scalars()
+                ) == {seed.businesses[tenant]}
+            other = "b" if tenant == "a" else "a"
+            assert (
+                connection.execute(
+                    text("UPDATE messages SET status = 'failed' WHERE tenant_id = :tenant"),
+                    {"tenant": seed.businesses[other]},
+                ).rowcount
+                == 0
+            )
+    with database.runtime.begin() as connection:
+        assert connection.execute(text("SELECT id FROM messages")).all() == []
+        set_context(connection, seed, tenant="a", subject="owner-b")
+        assert connection.execute(text("SELECT id FROM messages")).all() == []
+    drain(worker)
+    assert len(provider.calls) == len(forms)
+
+
+@pytest.mark.parametrize("callback_status", [None, "delivered", "read"])
+def test_late_provider_success_reconciles_recovered_lease_without_regressing_callbacks(
+    messaging_client, database, seed, bearer, worker, provider, monkeypatch, callback_status
+):
+    verify_link(messaging_client, seed, bearer)
+    assert signed_post(messaging_client, inbound_form()).status_code == 200
+    worker.run_once()
+    outbox = rows(database, "outbox")[0]
+    with paused_provider_send(worker, provider, monkeypatch, outbox["id"]) as result:
+        expire_and_recover_dispatch(database, worker, outbox["id"])
+        if callback_status is not None:
+            for status in (callback_status, "queued"):
+                response = signed_post(
+                    messaging_client,
+                    {"AccountSid": ACCOUNT_SID, "MessageSid": result.sid, "MessageStatus": status},
+                    public_url=provider.calls[0]["callback_url"],
+                )
+                assert response.status_code == 204
+    persisted = rows(database, "outbox")[0]
+    message = rows(database, "messages", "WHERE id = :id", {"id": outbox["message_id"]})[0]
+    assert persisted["status"] == "sent"
+    assert persisted["attempts"] == 1
+    assert persisted["last_error"] is None
+    assert persisted["lease_until"] is None
+    assert message["twilio_sid"] == result.sid
+    assert message["status"] == (callback_status or "queued")
+    assert message["processing_error"] is None
+    drain(worker)
+    assert len(provider.calls) == 1
+
+
+def test_concurrent_callbacks_and_late_provider_response_preserve_read_progress(
+    messaging_client, database, seed, bearer, worker, provider, monkeypatch
+):
+    verify_link(messaging_client, seed, bearer)
+    assert signed_post(messaging_client, inbound_form()).status_code == 200
+    worker.run_once()
+    outbox = rows(database, "outbox")[0]
+    statuses = ("read", "delivered", "sent", "queued", "read", "failed")
+    start = Barrier(len(statuses) + 1)
+    with ThreadPoolExecutor(max_workers=len(statuses)) as executor:
+        with paused_provider_send(worker, provider, monkeypatch, outbox["id"]) as result:
+            expire_and_recover_dispatch(database, worker, outbox["id"])
+
+            def callback(status):
+                start.wait(timeout=30)
+                return signed_post(
+                    messaging_client,
+                    {"AccountSid": ACCOUNT_SID, "MessageSid": result.sid, "MessageStatus": status},
+                    public_url=provider.calls[0]["callback_url"],
+                ).status_code
+
+            futures = [executor.submit(callback, status) for status in statuses]
+            # Releasing the provider response also races the committed callbacks.
+            start.wait(timeout=30)
+        assert [future.result(timeout=30) for future in futures] == [204] * len(statuses)
+    message = rows(database, "messages", "WHERE id = :id", {"id": outbox["message_id"]})[0]
+    assert message["twilio_sid"] == result.sid
+    assert message["status"] == "read"
+    assert message["processing_error"] is None
+    assert rows(database, "outbox")[0]["status"] == "sent"
+    drain(worker)
+    assert len(provider.calls) == 1
+
+
+@pytest.mark.parametrize("revocation", ["link", "membership"])
+def test_late_provider_result_rechecks_revocation_and_parks_without_content_writes(
+    messaging_client, database, seed, bearer, worker, provider, monkeypatch, revocation
+):
+    verify_link(messaging_client, seed, bearer)
+    assert signed_post(messaging_client, inbound_form()).status_code == 200
+    worker.run_once()
+    outbox = rows(database, "outbox")[0]
+    with paused_provider_send(worker, provider, monkeypatch, outbox["id"]) as result:
+        expire_and_recover_dispatch(database, worker, outbox["id"])
+        before_outbox = rows(database, "outbox")[0]
+        before_message = rows(database, "messages", "WHERE id = :id", {"id": outbox["message_id"]})[
+            0
+        ]
+        with database.admin.begin() as connection:
+            if revocation == "link":
+                connection.execute(text("UPDATE phone_links SET revoked_at = now()"))
+            else:
+                connection.execute(
+                    text("UPDATE memberships SET active = false WHERE user_id = :user"),
+                    {"user": seed.users["owner-a"]},
+                )
+        assert (
+            signed_post(
+                messaging_client,
+                {"AccountSid": ACCOUNT_SID, "MessageSid": result.sid, "MessageStatus": "read"},
+                public_url=provider.calls[0]["callback_url"],
+            ).status_code
+            == 403
+        )
+    assert rows(database, "outbox")[0] == before_outbox
+    assert (
+        rows(database, "messages", "WHERE id = :id", {"id": outbox["message_id"]})[0]
+        == before_message
+    )
+    job = rows(database, "message_jobs", "WHERE id = :id", {"id": outbox["id"]})[0]
+    assert job["ready"] is False
+    assert job["last_error"] == "access_revoked"
+    drain(worker)
+    assert len(provider.calls) == 1
+
+
+@pytest.mark.parametrize("recover_lease", [False, True])
+def test_provider_sid_mismatch_preserves_callback_sid_and_delivery_progress(
+    messaging_client, database, seed, bearer, worker, provider, monkeypatch, recover_lease
+):
+    verify_link(messaging_client, seed, bearer)
+    assert signed_post(messaging_client, inbound_form()).status_code == 200
+    worker.run_once()
+    outbox = rows(database, "outbox")[0]
+    callback_sid = "SM" + uuid4().hex
+    with paused_provider_send(worker, provider, monkeypatch, outbox["id"]) as result:
+        assert result.sid != callback_sid
+        if recover_lease:
+            expire_and_recover_dispatch(database, worker, outbox["id"])
+        assert (
+            signed_post(
+                messaging_client,
+                {"AccountSid": ACCOUNT_SID, "MessageSid": callback_sid, "MessageStatus": "read"},
+                public_url=provider.calls[0]["callback_url"],
+            ).status_code
+            == 204
+        )
+    message = rows(database, "messages", "WHERE id = :id", {"id": outbox["message_id"]})[0]
+    assert message["twilio_sid"] == callback_sid
+    assert message["status"] == "read"
+    assert message["processing_error"] is None
+    persisted = rows(database, "outbox")[0]
+    assert persisted["status"] == "sent"
+    assert persisted["last_error"] == "provider_sid_mismatch"
+    drain(worker)
+    assert len(provider.calls) == 1
+
+
+def test_provider_sid_collision_is_contained_without_modifying_another_tenants_message(
+    messaging_client, database, seed, bearer, worker, provider, monkeypatch
+):
+    verify_link(messaging_client, seed, bearer)
+    assert signed_post(messaging_client, inbound_form()).status_code == 200
+    drain(worker)
+    first = rows(database, "messages", "WHERE direction = 'outbound'")[0]
+    verify_link(messaging_client, seed, bearer, tenant="b", subject="owner-b", phone=OTHER_PHONE)
+    assert signed_post(messaging_client, inbound_form(phone=OTHER_PHONE)).status_code == 200
+    worker.run_once()
+    second_outbox = rows(
+        database, "outbox", "WHERE tenant_id = :tenant", {"tenant": seed.businesses["b"]}
+    )[0]
+    original_send = provider.send_text
+
+    def conflicting_provider_response(**kwargs):
+        original_send(**kwargs)
+        return SendResult(sid=first["twilio_sid"], status="queued")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(provider, "send_text", conflicting_provider_response)
+        worker.process_delivery(second_outbox["id"])
+    persisted = rows(database, "outbox", "WHERE id = :id", {"id": second_outbox["id"]})[0]
+    assert persisted["status"] == "uncertain"
+    assert persisted["attempts"] == 1
+    assert persisted["last_error"] == "provider_sid_conflict"
+    assert persisted["lease_until"] is None
+    second = rows(database, "messages", "WHERE id = :id", {"id": second_outbox["message_id"]})[0]
+    assert second["twilio_sid"] is None
+    assert second["status"] == "uncertain"
+    assert rows(database, "messages", "WHERE id = :id", {"id": first["id"]})[0] == first
+    assert len(provider.accepted_sids) == len(set(provider.accepted_sids)) == 2
+    for _ in range(3):
+        worker.process_delivery(second_outbox["id"])
+        drain(worker)
+    assert len(provider.calls) == 2
+
+
+@pytest.mark.parametrize("stage", ["before_dispatch", "after_dispatch"])
+def test_stale_attempt_cannot_dispatch_or_persist_over_a_newer_attempt(
+    messaging_client, database, seed, bearer, worker, provider, monkeypatch, stage
+):
+    verify_link(messaging_client, seed, bearer)
+    assert signed_post(messaging_client, inbound_form()).status_code == 200
+    worker.run_once()
+    outbox = rows(database, "outbox")[0]
+
+    def advance_attempt():
+        # Model a newer durable operation while an older command is still in memory.
+        with database.admin.begin() as connection:
+            connection.execute(
+                text("UPDATE outbox SET attempts = attempts + 1 WHERE id = :id"),
+                {"id": outbox["id"]},
+            )
+
+    if stage == "before_dispatch":
+        original_send = worker._send
+
+        def stale_dispatch(command):
+            advance_attempt()
+            original_send(command)
+
+        with monkeypatch.context() as patch:
+            patch.setattr(worker, "_send", stale_dispatch)
+            worker.process_delivery(outbox["id"])
+        assert provider.calls == []
+    else:
+        with paused_provider_send(worker, provider, monkeypatch, outbox["id"]):
+            advance_attempt()
+        assert len(provider.calls) == 1
+    persisted = rows(database, "outbox")[0]
+    message = rows(database, "messages", "WHERE id = :id", {"id": outbox["message_id"]})[0]
+    assert persisted["attempts"] == 2
+    assert persisted["status"] == "dispatching"
+    assert message["twilio_sid"] is None
+    assert message["status"] == "pending"

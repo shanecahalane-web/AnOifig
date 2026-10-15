@@ -195,6 +195,7 @@ class MessageJob(Base):
             name="valid_entity",
         ),
         Index("ix_message_jobs_ready_due", "ready", "due_at"),
+        Index("ix_message_jobs_ready_claimed_due", "ready", "last_claimed_at", "due_at", "id"),
     )
 
     id: Mapped[UUID] = mapped_column(primary_key=True)
@@ -209,3 +210,6 @@ class MessageJob(Base):
     due_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     ready: Mapped[bool] = mapped_column(Boolean, nullable=False)
     last_error: Mapped[str | None] = mapped_column(String(64))
+    claim_token: Mapped[UUID | None] = mapped_column()
+    claim_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
