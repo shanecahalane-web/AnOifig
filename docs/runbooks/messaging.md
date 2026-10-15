@@ -146,8 +146,12 @@ not refresh the WhatsApp window. The worker commits reply/outbox creation before
 sending; a provider failure cannot lose the intent to send.
 
 Operational claims last two minutes and are separate from outbound dispatch
-leases. Claims use opaque, receipt-bound settlement and least-recently-claimed
-ordering, so locked older source rows cannot repeatedly displace later work.
+leases. Claims use opaque, receipt-bound settlement and age-based queue turns:
+the later of due time and last claim time, followed by due time and UUID. Each
+claim moves that job behind work already waiting, so neither fresh traffic nor
+returning retries can indefinitely displace the other. The partial ready-job
+index supports the same order in discovery and claiming. See
+[ADR 0005](../adr/0005-queue-scheduling.md) for the fairness argument and limits.
 Source contention defers the claim briefly; an entire batch without progress
 causes a one-second polling delay. After a worker crash, expired claims can be
 rediscovered. Their receipt is coordination metadata, never tenant authority.
@@ -207,17 +211,24 @@ mocked; no live credentials are used. Follow the database runbook for host test
 execution and approved custom CA configuration.
 
 Recovery tests include distinct simulated provider SIDs, concurrent messages
-across tenants, sustained source-row locking, expired/stale queue receipts,
+across tenants, four consecutive batches of 100 fresh arrivals alongside an
+older retry/expired claim, fresh arrivals under 400 returning retries, concurrent
+workers with sustained source/metadata row locks, expired/stale queue receipts,
 paused providers racing lease recovery and callbacks, and actual child-process
 termination/restart. A test-only local provider journals acceptance before
 termination; a separate test commits acceptance and then simulates loss of the
 commit acknowledgement. No production exit hooks or live Twilio calls are used.
+The 20,002-row queue regression checks the actual candidate query's indexed plan
+and measures real runtime claim batches. These checks establish local scheduling
+behaviour; production throughput and latency still require staging load tests.
 
 Review migration SQL and runtime grants together. Never use `create_all`, run
 migrations automatically in the API/worker, or fix RLS/grant failures by using
-the schema owner at runtime. Messaging downgrade removes its persisted data and
-must be limited to disposable verification or an explicitly reviewed release
-plan. Backups and rollback/forward-fix strategy are required before production.
+the schema owner at runtime. Downgrading 0004 preserves source data and claims
+but restores the known unfair scheduler; 0003 rollback removes only claim
+coordination. Downgrading 0002 removes messaging data. Limit rollback to
+disposable verification or an explicitly reviewed release plan. Backups and a
+rollback/forward-fix strategy are required before production.
 
 ## Future Azure deployment
 

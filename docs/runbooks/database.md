@@ -54,13 +54,23 @@ inaccessible tenant content. See [ADR 0004](../adr/0004-whatsapp-messaging.md).
 For a database already on Milestone 2 revision `0002_whatsapp_messaging`, stop
 API/worker processes and run the existing owner-only Alembic upgrade and grant
 commands before starting the new runtime. Revision `0003_messaging_queue_claims`
-adds operational claim fields/indexes and reviewed metadata-only gateways in
-place; it preserves existing links, messages, outboxes and pending work. Do not
-reset the database or edit an applied migration to install this update. Runtime
-code requires the new grants and fails closed if they are missing. Downgrading
-0003 removes claim coordination but preserves source messaging records; pause
-workers before any reviewed rollback. All earlier TLS/owner separation rules
-still apply to upgrade, grant and rollback commands.
+adds operational claim fields and reviewed metadata-only gateways. Forward
+revision `0004_messaging_queue_fairness` replaces the discovery/claim ordering and
+its supporting index. Databases already on 0003 run `alembic upgrade head` through
+the same owner-only procedure; no reset, backfill, claim invalidation or extra
+runtime grant is needed. The replaced functions retain their owners and ACLs.
+Clean installations apply the entire migration chain. All paths preserve links,
+messages, outboxes, pending work, RLS and existing receipts. Do not edit or stamp
+past an applied migration. Runtime code requires the approved grants and fails
+closed if they are missing.
+
+Keep API/workers paused during the transactional 0004 index creation, which can
+block writes. Allow a maintenance window based on queue-table size, and verify
+runtime grants/readiness before restart. Downgrading 0004 preserves source data
+and claims but restores 0003's known starvation defect; prefer a forward fix and
+review before resuming sustained traffic. Downgrading 0003 removes operational
+claim coordination but preserves source messaging records. Pause workers before
+any reviewed rollback. All earlier TLS/owner separation rules still apply.
 
 The gateway functions and privileged indexing helpers require the metadata owner,
 SECURITY DEFINER and fixed `search_path=pg_catalog`. PUBLIC EXECUTE and runtime

@@ -195,7 +195,13 @@ class MessageJob(Base):
             name="valid_entity",
         ),
         Index("ix_message_jobs_ready_due", "ready", "due_at"),
-        Index("ix_message_jobs_ready_claimed_due", "ready", "last_claimed_at", "due_at", "id"),
+        Index(
+            "ix_message_jobs_ready_turn",
+            text("GREATEST(due_at, COALESCE(last_claimed_at, due_at))"),
+            "due_at",
+            "id",
+            postgresql_where=text("ready"),
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(primary_key=True)

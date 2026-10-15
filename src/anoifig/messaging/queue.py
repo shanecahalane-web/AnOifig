@@ -44,8 +44,10 @@ class PostgresWorkQueue:
     Claims coordinate polling workers without granting tenant access. Domain
     handlers still lock and recheck source state within their transaction.
     Expired claims recover after a worker crash; settling an older receipt
-    cannot release a newer worker's delivery. Least-recently-claimed ordering
-    prevents busy source rows from starving later work.
+    cannot release a newer worker's delivery. Jobs take age-based turns using
+    the later of their due time and last claim time, followed by due time and
+    UUID. Each attempt moves behind work already waiting; neither fresh arrivals
+    nor repeatedly contended work has permanent priority over the other.
     """
 
     def __init__(self, engine: Engine, settings: Settings) -> None:

@@ -213,14 +213,18 @@ exactly-once delivery across Twilio and PostgreSQL.
 An authorised late successful response can also reconcile the same dispatch
 attempt after lease recovery, retaining its SID without regressing callback
 progress. Conflicting SIDs are retained as diagnostics and never cause a resend.
-The local queue uses receipt-bound, two-minute operational claims and gives the
-least recently claimed ready jobs priority. Locked source rows are deferred;
+The local queue uses receipt-bound, two-minute operational claims. Ready jobs
+take age-based turns using the later of their due time and last claim time, so
+both new messages and retries progress under sustained arrivals across tenants.
+Each attempt moves behind work already waiting. Locked source rows are deferred;
 workers pause when a batch cannot advance. Expired claims survive process
 restarts through PostgreSQL, while domain locks still prevent duplicate actions.
 
-Existing Milestone 2 databases upgrade through migration `0003_messaging_queue_claims`
-without resetting messages or outboxes. Apply Alembic and runtime grants before
-restarting both API and worker; see the [database runbook](docs/runbooks/database.md).
+Existing Milestone 2 databases upgrade through migrations `0003_messaging_queue_claims`
+and `0004_messaging_queue_fairness` without resetting messages, outboxes or active
+claims. Pause API/workers, apply Alembic and verify runtime grants, then restart;
+see the [database runbook](docs/runbooks/database.md) and
+[scheduling decision](docs/adr/0005-queue-scheduling.md).
 
 Free-form replies are allowed only within WhatsApp's 24-hour customer-service
 window, which is checked again at dispatch. Outside that window the outbox is

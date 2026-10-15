@@ -81,8 +81,10 @@ work after process failure; an in-memory queue is not the durable boundary.
 
 Migration 0003 adds content-free operational claims without rewriting migration
 0002 or discarding accepted messages. Claims select ready, due jobs atomically
-with `FOR UPDATE SKIP LOCKED`, ordered by least recent claim and then due time
-and UUID. Each receives an opaque receipt and a two-minute lease. Receipt-bound
+with `FOR UPDATE SKIP LOCKED`. Revision 0004 corrects its permanent priority for
+never-claimed jobs: order by the later of due time and last claim time, then due
+time and UUID, as explained in [ADR 0005](0005-queue-scheduling.md). Each receives
+an opaque receipt and a two-minute lease. Receipt-bound
 settlement cannot release another worker's claim. Contended work is abandoned
 with a short cooldown; a batch that settles no work delays the polling loop.
 Expired claims become available after a crash. Source row locks, current
