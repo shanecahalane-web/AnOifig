@@ -13,6 +13,7 @@ from anoifig.customers.service import CustomerNotFound
 from anoifig.db.session import UnsafeDatabaseConfiguration, build_engine
 from anoifig.identity.auth import OIDCTokenVerifier, TokenVerifier
 from anoifig.identity.service import AccessDenied
+from anoifig.messaging.routes import router as messaging_router
 
 
 def create_app(
@@ -42,6 +43,7 @@ def create_app(
         redoc_url=None,
     )
     application.include_router(router)
+    application.include_router(messaging_router)
 
     @application.exception_handler(AccessDenied)
     async def access_denied(request: Request, exc: AccessDenied) -> JSONResponse:

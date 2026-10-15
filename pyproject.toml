@@ -15,6 +15,7 @@ dependencies = [
   "pydantic-settings>=2.6,<3",
   "pyjwt[crypto]>=2.10,<3",
   "sqlalchemy>=2.0,<2.1",
+  "twilio>=9.8,<10",
   "uvicorn>=0.32,<1",
 ]
 

@@ -7,6 +7,9 @@ services:
   api:
     build:
       secrets: [build_ca]
+  worker:
+    build:
+      secrets: [build_ca]
   tests:
     build:
       secrets: [build_ca]

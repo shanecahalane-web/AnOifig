@@ -13,6 +13,7 @@ from anoifig.db.connection_config import (
     validate_environment,
     verify_database_tls,
 )
+from anoifig.db.messaging_models import Conversation, Message, MessageJob, Outbox, PhoneLink  # noqa: F401
 from anoifig.db.models import Business, Customer, Membership, User  # noqa: F401
 
 target_metadata = Base.metadata
