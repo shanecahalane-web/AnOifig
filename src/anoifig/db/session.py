@@ -97,7 +97,16 @@ def check_runtime_database(connection: Connection, *, require_tls: bool = False)
     }
     expected_policies |= {
         (table, f"{table}_{action}")
-        for table in ("phone_links", "conversations", "messages", "outbox")
+        for table in (
+            "phone_links",
+            "conversations",
+            "messages",
+            "outbox",
+            "tara_states",
+            "tara_runs",
+            "tara_usage",
+        )
+        if table in RUNTIME_TABLE_PRIVILEGES
         for action in ("read_member", "insert_writer", "update_writer")
     }
     expected_policies |= {

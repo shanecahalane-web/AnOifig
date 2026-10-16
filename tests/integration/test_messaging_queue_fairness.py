@@ -278,8 +278,20 @@ def test_concurrent_workers_recover_expiry_and_bypass_locked_rows_without_duplic
             == 1
         )
     expire(database, locked_sources)
-    for _ in range(4):
+    for _ in range(12):
+        # Source order can require another polling turn after a predecessor
+        # settles. Advance the test's cooldowns after both workers have joined;
+        # do not alter source retry times, receipts or external delivery state.
+        with database.admin.begin() as connection:
+            connection.execute(
+                text(
+                    "UPDATE message_jobs SET claim_until = now() - interval '1 second' "
+                    "WHERE ready AND due_at <= now()"
+                )
+            )
         parallel_batches()
+        if len(provider.calls) == 202:
+            break
     queue.complete(lost_delivery)
     queue.abandon(lost_delivery)
     assert parallel_batches() == 0

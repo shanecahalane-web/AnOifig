@@ -93,7 +93,8 @@ async def signed_form(request: Request, settings: Settings, public_url: str) -> 
     except WebhookValidationError:
         raise HTTPException(400, "Invalid webhook") from None
     signatures = request.headers.getlist("x-twilio-signature")
-    assert settings.twilio_auth_token is not None
+    if settings.twilio_auth_token is None:
+        raise HTTPException(503, "Messaging unavailable")
     if len(signatures) != 1 or not verify_signature(
         public_url=public_url,
         parameters=parameters,
@@ -119,7 +120,8 @@ def persist_inbound(engine: Engine, settings: Settings, payload: InboundPayload)
 @router.post("/webhooks/twilio/inbound")
 async def inbound(request: Request) -> Response:
     settings = configured(request)
-    assert settings.twilio_inbound_url is not None and settings.twilio_account_sid is not None
+    if settings.twilio_inbound_url is None or settings.twilio_account_sid is None:
+        raise HTTPException(503, "Messaging unavailable")
     parameters = await signed_form(request, settings, settings.twilio_inbound_url)
     try:
         payload = InboundPayload.model_validate(parameters)
@@ -149,14 +151,16 @@ def persist_status(
         job = lookup_job(session, attempt_id)
         if job is None or job.kind != "outbound":
             raise AccessDenied
-        assert settings.twilio_whatsapp_number is not None
+        if settings.twilio_whatsapp_number is None:
+            raise AccessDenied
         apply_callback(session, job.route, attempt_id, payload, settings.twilio_whatsapp_number)
 
 
 @router.post("/webhooks/twilio/status")
 async def status_callback(request: Request, attempt_id: UUID) -> Response:
     settings = configured(request)
-    assert settings.twilio_status_url is not None and settings.twilio_account_sid is not None
+    if settings.twilio_status_url is None or settings.twilio_account_sid is None:
+        raise HTTPException(503, "Messaging unavailable")
     parameters = await signed_form(
         request, settings, callback_url(settings.twilio_status_url, attempt_id)
     )
