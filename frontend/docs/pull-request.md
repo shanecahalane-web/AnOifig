@@ -1,0 +1,11 @@
+# Add An Oifig marketing site with an interactive Tara invoice preview
+
+Adds the separate Next.js / TypeScript / Tailwind public website under `frontend/`. The retained forest green, gold and cream design now puts a realistic interactive WhatsApp-style product preview alongside a clearer headline and explanation for Irish tradespeople. Existing workflow, features, roadmap, early-access, FAQ and legal sections are retained and refined.
+
+The local Tara simulation demonstrates an invoice request, review, €450 → €500 correction, a fresh review of the new version, explicit approval and genuine sample PDF generation. The invoice preview includes fictional business/customer details, dates, itemisation, an explicitly assumed 13.5% VAT rate and invalid demonstration payment details. Integer-cent calculations and revision guards prevent stale or unreviewed approval in the simulation. No document is issued, sent or payable.
+
+Early-access/contact forms use accessible validation, sample details and explicit consent with a typed mock adapter. The prior personal-data file downloads are removed. Confirmations explicitly say no waiting-list entry/message was created; no information is transmitted or persisted. A secure approved destination, legal/privacy/retention review and verified operator/contact details are required before live signup. Six roadmap items remain clearly planned; no unapproved prices or customer claims are published.
+
+Validation: production build, TypeScript, formatting, zero reported production dependency vulnerabilities and **35 passing tests** (5 unit plus 30 desktop/iPhone-sized/small-Android browser checks). Automated axe scans cover every public page and the invoice dialog. Includes current screenshots, a sample PDF and run/review instructions in `frontend/docs/` and `frontend/README.md`. No additional packages were introduced.
+
+All implementation changes are inside `frontend/`; Python backend code, dependencies, migrations, authentication and Twilio integration are untouched. Backend/database suites were not run. No merge or deployment is requested. The official logo is still unavailable; insertion points in the shared header/footer are documented. Manano’s live site remains inaccessible under the cloud network policy; no proprietary reference material was copied and no direct inspection is claimed.

@@ -1,0 +1,62 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>
+endobj
+4 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+5 0 obj
+<< /Length 1930 >>
+stream
+q 0.96 0.93 0.85 rg 35 744 525 64 re f Q
+0.07 0.18 0.14 rg
+BT /F1 18 Tf 45 785 Td (SAMPLE ONLY - NOT A TAX INVOICE) Tj ET
+BT /F1 10 Tf 45 758 Td (Approval simulated. Not issued, sent or payable.) Tj ET
+BT /F1 10 Tf 45 739 Td () Tj ET
+BT /F1 18 Tf 45 720 Td (O'Neill Plumbing - FICTIONAL BUSINESS) Tj ET
+BT /F1 11 Tf 45 693 Td (1 Example Lane, Demo Town, Ireland) Tj ET
+BT /F1 10 Tf 45 673 Td (demo@plumbing.example | Phone: not a live number) Tj ET
+BT /F1 10 Tf 45 654 Td (VAT reference: DEMO-NOT-VALID) Tj ET
+BT /F1 12 Tf 45 635 Td () Tj ET
+BT /F1 12 Tf 45 614 Td (Sample invoice: DEMO-2026-001 / revision 2) Tj ET
+BT /F1 10 Tf 45 593 Td (Date: 15 October 2026 | Due: 29 October 2026) Tj ET
+BT /F1 12 Tf 45 574 Td () Tj ET
+BT /F1 10 Tf 45 553 Td (BILL TO) Tj ET
+BT /F1 12 Tf 45 534 Td (John Murphy - FICTIONAL CUSTOMER) Tj ET
+BT /F1 10 Tf 45 513 Td (2 Sample Road, Demo Town, Ireland) Tj ET
+BT /F1 12 Tf 45 494 Td () Tj ET
+BT /F1 11 Tf 45 473 Td (WORK                                  QTY       AMOUNT) Tj ET
+BT /F1 10 Tf 45 453 Td (Shower replacement \(supply & labour\)    1         EUR 500.00) Tj ET
+BT /F1 12 Tf 45 434 Td () Tj ET
+BT /F1 11 Tf 45 413 Td (Subtotal                                        EUR 500.00) Tj ET
+BT /F1 11 Tf 45 393 Td (Illustrative VAT \(13.5%\)                          EUR 67.50) Tj ET
+BT /F1 16 Tf 45 373 Td (Sample total                                    EUR 567.50) Tj ET
+BT /F1 12 Tf 45 348 Td () Tj ET
+BT /F1 11 Tf 45 327 Td (PAYMENT DETAILS - FICTIONAL / DO NOT PAY) Tj ET
+BT /F1 10 Tf 45 307 Td (Account: DEMO-ACCOUNT | IBAN: DEMO-INVALID) Tj ET
+BT /F1 10 Tf 45 288 Td (Reference: DEMO-2026-001) Tj ET
+BT /F1 12 Tf 45 269 Td () Tj ET
+BT /F1 10 Tf 45 248 Td (13.5% VAT is an assumed demo rate, not tax advice.) Tj ET
+BT /F1 10 Tf 45 229 Td (Actual VAT treatment depends on the business and work.) Tj ET
+BT /F1 10 Tf 45 210 Td (All names, addresses and amounts are demonstration data.) Tj ET
+endstream
+endobj
+xref
+0 6
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000115 00000 n 
+0000000241 00000 n 
+0000000311 00000 n 
+trailer
+<< /Size 6 /Root 1 0 R >>
+startxref
+2293
+%%EOF

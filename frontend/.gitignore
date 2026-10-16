@@ -1,0 +1,9 @@
+node_modules/
+.next/
+playwright-report/
+test-results/
+*.tsbuildinfo
+.env*
+# Override the parent Python template's lib/ rule for frontend source.
+!/lib/
+!/lib/**
