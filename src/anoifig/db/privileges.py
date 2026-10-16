@@ -16,7 +16,28 @@ RUNTIME_TABLE_PRIVILEGES: dict[str, frozenset[str]] = {
     "users": frozenset({"SELECT"}),
     "memberships": frozenset({"SELECT"}),
     "customers": frozenset({"SELECT", "INSERT", "UPDATE", "DELETE"}),
+    "phone_links": frozenset({"SELECT", "INSERT", "UPDATE"}),
+    "conversations": frozenset({"SELECT", "INSERT", "UPDATE"}),
+    "messages": frozenset({"SELECT", "INSERT", "UPDATE"}),
+    "outbox": frozenset({"SELECT", "INSERT", "UPDATE"}),
+    "message_jobs": frozenset(),
 }
+
+# Do not give the application generic function execution. These functions reveal
+# only routing IDs/identity context or consume an existing phone challenge.
+RUNTIME_FUNCTIONS = frozenset(
+    {
+        "messaging_route_phone(text)",
+        "messaging_redeem_phone(text,text)",
+        "messaging_lookup_job(uuid)",
+        "messaging_discover_jobs(integer)",
+        "messaging_claim_jobs(integer)",
+        "messaging_release_job(uuid,uuid,integer)",
+        "messaging_park_job(uuid)",
+    }
+)
+GATEWAY_TRIGGER_FUNCTIONS = frozenset({"messaging_index_inbound()", "messaging_index_outbound()"})
+GATEWAY_GUARD_FUNCTIONS = frozenset({"messaging_guard_phone_link()"})
 
 
 def provision_runtime_grants(connection: Connection, runtime_name: str) -> None:
@@ -35,8 +56,12 @@ def provision_runtime_grants(connection: Connection, runtime_name: str) -> None:
         connection.exec_driver_sql(f"GRANT CONNECT ON DATABASE {database} TO {role}")
         connection.exec_driver_sql(f"GRANT USAGE ON SCHEMA public TO {role}")
         for table, privileges in RUNTIME_TABLE_PRIVILEGES.items():
+            if not privileges:
+                continue
             allowed = ", ".join(sorted(privileges))
             connection.exec_driver_sql(f"GRANT {allowed} ON TABLE public.{quote(table)} TO {role}")
+        for function in sorted(RUNTIME_FUNCTIONS):
+            connection.exec_driver_sql(f"GRANT EXECUTE ON FUNCTION public.{function} TO {role}")
         check_runtime_privileges(connection, role_name=runtime_name)
 
 
@@ -161,4 +186,52 @@ def check_runtime_privileges(
         ),
         {"role": role_name},
     ):
+        raise UnsafeDatabaseConfiguration
+    check_runtime_functions(connection, role_name=role_name, require_expected=require_expected)
+
+
+def check_runtime_functions(
+    connection: Connection, *, role_name: str, require_expected: bool
+) -> None:
+    """Validate callable gateway functions and the privileged trigger helpers.
+
+    Fixed search paths and metadata ownership remain mandatory even before the
+    first grant. Ordinary source-table triggers never expose a callable runtime
+    entrypoint. PUBLIC execute is forbidden for every gateway/helper function.
+    """
+    functions = connection.execute(
+        text(
+            """
+            SELECT p.oid, p.oid::regprocedure::text AS signature, p.prosecdef,
+                   p.proconfig, p.prokind,
+                   p.proowner = (SELECT relowner FROM pg_class
+                                WHERE oid = 'public.phone_links'::regclass) AS metadata_owner,
+                   has_function_privilege(:role, p.oid, 'EXECUTE') AS allowed,
+                   has_function_privilege(:role, p.oid, 'EXECUTE WITH GRANT OPTION') AS grantable,
+                   EXISTS (SELECT 1 FROM aclexplode(
+                                        COALESCE(p.proacl, acldefault('f', p.proowner))) a
+                            WHERE a.grantee = 0 AND a.privilege_type = 'EXECUTE') AS public_execute
+              FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace
+            """
+        ),
+        {"role": role_name},
+    ).all()
+    expected = RUNTIME_FUNCTIONS | GATEWAY_TRIGGER_FUNCTIONS | GATEWAY_GUARD_FUNCTIONS
+    found: set[str] = set()
+    for function in functions:
+        signature = function.signature.removeprefix("public.")
+        if function.grantable or (function.allowed and signature not in RUNTIME_FUNCTIONS):
+            raise UnsafeDatabaseConfiguration
+        if signature in expected:
+            found.add(signature)
+            if (
+                function.prosecdef != (signature not in GATEWAY_GUARD_FUNCTIONS)
+                or function.prokind != "f"
+                or function.proconfig != ["search_path=pg_catalog"]
+                or not function.metadata_owner
+                or function.public_execute
+                or (require_expected and signature in RUNTIME_FUNCTIONS and not function.allowed)
+            ):
+                raise UnsafeDatabaseConfiguration
+    if found != expected:
         raise UnsafeDatabaseConfiguration

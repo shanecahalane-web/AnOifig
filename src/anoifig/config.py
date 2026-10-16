@@ -1,7 +1,8 @@
 """Typed, secret-safe process configuration."""
 
+import re
 from functools import lru_cache
-from urllib.parse import urlsplit
+from urllib.parse import parse_qsl, urlsplit
 
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -28,6 +29,13 @@ class Settings(BaseSettings):
     database_connect_timeout: int = Field(default=5, ge=1, le=30)
     database_statement_timeout_ms: int = Field(default=5000, ge=100, le=60000)
     oidc_http_timeout: int = Field(default=5, ge=1, le=15)
+    twilio_enabled: bool = False
+    twilio_account_sid: SecretStr | None = None
+    twilio_auth_token: SecretStr | None = None
+    twilio_whatsapp_number: str | None = None
+    twilio_inbound_url: str | None = None
+    twilio_status_url: str | None = None
+    twilio_http_timeout: int = Field(default=10, ge=1, le=30)
 
     @field_validator("database_url")
     @classmethod
@@ -43,6 +51,83 @@ class Settings(BaseSettings):
             if not value:
                 return None
         return value
+
+    @field_validator(
+        "twilio_account_sid",
+        "twilio_auth_token",
+        "twilio_whatsapp_number",
+        "twilio_inbound_url",
+        "twilio_status_url",
+        mode="before",
+    )
+    @classmethod
+    def blank_twilio_configuration_is_absent(cls, value: object) -> object:
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+    @model_validator(mode="after")
+    def validate_twilio_configuration(self) -> "Settings":
+        values = (
+            self.twilio_account_sid,
+            self.twilio_auth_token,
+            self.twilio_whatsapp_number,
+            self.twilio_inbound_url,
+            self.twilio_status_url,
+        )
+        if (self.twilio_enabled or any(value is not None for value in values)) and not all(values):
+            raise ValueError("configure all Twilio credentials, sender and public webhook URLs")
+        if self.twilio_account_sid is not None and not re.fullmatch(
+            r"AC[0-9a-fA-F]{32}", self.twilio_account_sid.get_secret_value()
+        ):
+            raise ValueError("Twilio account SID has an invalid format")
+        if self.twilio_auth_token is not None:
+            token = self.twilio_auth_token.get_secret_value()
+            if not token.strip() or token != token.strip() or len(token) > 256:
+                raise ValueError("Twilio auth token has an invalid format")
+        if self.twilio_whatsapp_number is not None and not re.fullmatch(
+            r"whatsapp:\+[1-9][0-9]{1,14}", self.twilio_whatsapp_number
+        ):
+            raise ValueError("Twilio sender must be a WhatsApp E.164 address")
+        for value in (self.twilio_inbound_url, self.twilio_status_url):
+            if value is None:
+                continue
+            parsed = urlsplit(value)
+            _ = parsed.port
+            if (
+                len(value) > 2048
+                or not value.isascii()
+                or value != value.strip()
+                or any(ord(character) < 33 or ord(character) == 127 for character in value)
+                or "\\" in value
+                or re.search(r"%(?![0-9a-fA-F]{2})", value)
+                or parsed.scheme not in {"http", "https"}
+                or not parsed.hostname
+                or not parsed.path.startswith("/")
+                or parsed.username
+                or parsed.password
+                or parsed.fragment
+            ):
+                raise ValueError("Twilio webhooks require absolute public HTTP URLs")
+            if self.environment == "production" and parsed.scheme != "https":
+                raise ValueError("production Twilio webhooks require HTTPS")
+            try:
+                query = parse_qsl(
+                    parsed.query,
+                    keep_blank_values=True,
+                    strict_parsing=True,
+                    encoding="utf-8",
+                    errors="strict",
+                    max_num_fields=64,
+                )
+            except (UnicodeError, ValueError) as error:
+                raise ValueError("Twilio webhook query must be unambiguous UTF-8") from error
+            names = [name for name, _ in query]
+            if len(names) != len(set(names)):
+                raise ValueError("Twilio webhook query keys must not repeat")
+            if value == self.twilio_status_url and "attempt_id" in names:
+                raise ValueError("Twilio status URL must reserve the attempt_id query key")
+        return self
 
     @model_validator(mode="after")
     def validate_oidc_and_production(self) -> "Settings":

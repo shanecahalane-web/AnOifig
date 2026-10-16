@@ -42,6 +42,13 @@ services:
       ANOIFIG_OIDC_ISSUER: ${ANOIFIG_OIDC_ISSUER:-}
       ANOIFIG_OIDC_AUDIENCE: ${ANOIFIG_OIDC_AUDIENCE:-}
       ANOIFIG_OIDC_JWKS_URL: ${ANOIFIG_OIDC_JWKS_URL:-}
+      ANOIFIG_TWILIO_ENABLED: ${ANOIFIG_TWILIO_ENABLED:-false}
+      ANOIFIG_TWILIO_HTTP_TIMEOUT: ${ANOIFIG_TWILIO_HTTP_TIMEOUT:-10}
+      ANOIFIG_TWILIO_ACCOUNT_SID: ${ANOIFIG_TWILIO_ACCOUNT_SID:-}
+      ANOIFIG_TWILIO_AUTH_TOKEN: ${ANOIFIG_TWILIO_AUTH_TOKEN:-}
+      ANOIFIG_TWILIO_WHATSAPP_NUMBER: ${ANOIFIG_TWILIO_WHATSAPP_NUMBER:-}
+      ANOIFIG_TWILIO_INBOUND_URL: ${ANOIFIG_TWILIO_INBOUND_URL:-}
+      ANOIFIG_TWILIO_STATUS_URL: ${ANOIFIG_TWILIO_STATUS_URL:-}
     ports:
       - "127.0.0.1:8000:8000"
     depends_on:
@@ -52,6 +59,30 @@ services:
       interval: 10s
       timeout: 3s
       retries: 3
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  worker:
+    build:
+      context: .
+      target: runtime
+    environment:
+      ANOIFIG_ENVIRONMENT: development
+      ANOIFIG_DATABASE_URL: postgresql+psycopg://anoifig_app:${ANOIFIG_APP_PASSWORD}@postgres:5432/anoifig
+      ANOIFIG_TWILIO_ENABLED: ${ANOIFIG_TWILIO_ENABLED:-false}
+      ANOIFIG_TWILIO_HTTP_TIMEOUT: ${ANOIFIG_TWILIO_HTTP_TIMEOUT:-10}
+      ANOIFIG_TWILIO_ACCOUNT_SID: ${ANOIFIG_TWILIO_ACCOUNT_SID:-}
+      ANOIFIG_TWILIO_AUTH_TOKEN: ${ANOIFIG_TWILIO_AUTH_TOKEN:-}
+      ANOIFIG_TWILIO_WHATSAPP_NUMBER: ${ANOIFIG_TWILIO_WHATSAPP_NUMBER:-}
+      ANOIFIG_TWILIO_INBOUND_URL: ${ANOIFIG_TWILIO_INBOUND_URL:-}
+      ANOIFIG_TWILIO_STATUS_URL: ${ANOIFIG_TWILIO_STATUS_URL:-}
+    # Safe simulator default: records results without making provider API calls.
+    command: ["uv", "run", "--no-sync", "python", "-m", "anoifig.messaging.worker", "--local"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
     security_opt:
       - no-new-privileges:true
     cap_drop:

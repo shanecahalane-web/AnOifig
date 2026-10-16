@@ -16,8 +16,9 @@ into executable SQL by the shell.
 Compose's separate migration service uses the local owner account to apply
 Alembic and run `scripts/grant_runtime.py`. The helper verifies that the runtime
 role is distinct, unprivileged and does not own schema objects before granting
-the application's table permissions. It also rejects unexpected effective
-privileges, including PUBLIC grants, table/column grant options, and `TRUNCATE`.
+the application's table and exact gateway-function permissions. It also rejects
+unexpected effective privileges, including PUBLIC grants, table/column/function
+grant options, and `TRUNCATE`.
 The local PostgreSQL owner is a superuser for cluster initialization and
 disposable test setup. A production migration
 role should own its schema without unnecessary cluster-level privileges; the
@@ -25,20 +26,65 @@ runtime role must always remain non-owner and unable to bypass RLS.
 
 Never grant runtime users membership in an owner, superuser or BYPASSRLS role.
 Do not grant CREATE on the application schema or broad default table privileges.
-Future tables need reviewed grants and RLS policies before the API can use them.
+Future tables need reviewed grants and RLS policies before the API or worker can
+use them.
 
 ## Runtime privilege drift
 
-The approved database/schema/table permissions are CONNECT, USAGE on `public`,
-SELECT on `businesses`, `users`, and `memberships`, and
-SELECT/INSERT/UPDATE/DELETE on `customers`. No grant options are allowed. The
-validator rejects extra table and column rights (including `TRUNCATE`,
+Milestone 2 extends the Milestone 1 allowlist. Approved permissions are:
+
+| Object | Runtime permissions |
+| --- | --- |
+| Database and `public` schema | CONNECT and schema USAGE. |
+| `businesses`, `users`, `memberships` | SELECT. |
+| `customers` | SELECT/INSERT/UPDATE/DELETE. |
+| `phone_links`, `conversations`, `messages`, `outbox` | SELECT/INSERT/UPDATE. |
+| `message_jobs` | No direct runtime table or column access. |
+
+Runtime EXECUTE is limited to the exact gateway signatures
+`messaging_route_phone(text)`, `messaging_redeem_phone(text,text)`,
+`messaging_lookup_job(uuid)`, `messaging_discover_jobs(integer)`,
+`messaging_park_job(uuid)`, `messaging_claim_jobs(integer)` and
+`messaging_release_job(uuid,uuid,integer)`. These expose minimal routing/work metadata or consume
+an existing challenge; tenant content still requires active authorisation and
+ordinary RLS context. Reviewed source-table triggers maintain `message_jobs`.
+The worker can park its operational index after revocation without changing
+inaccessible tenant content. See [ADR 0004](../adr/0004-whatsapp-messaging.md).
+
+For a database already on Milestone 2 revision `0002_whatsapp_messaging`, stop
+API/worker processes and run the existing owner-only Alembic upgrade and grant
+commands before starting the new runtime. Revision `0003_messaging_queue_claims`
+adds operational claim fields and reviewed metadata-only gateways. Forward
+revision `0004_messaging_queue_fairness` replaces the discovery/claim ordering and
+its supporting index. Databases already on 0003 run `alembic upgrade head` through
+the same owner-only procedure; no reset, backfill, claim invalidation or extra
+runtime grant is needed. The replaced functions retain their owners and ACLs.
+Clean installations apply the entire migration chain. All paths preserve links,
+messages, outboxes, pending work, RLS and existing receipts. Do not edit or stamp
+past an applied migration. Runtime code requires the approved grants and fails
+closed if they are missing.
+
+Keep API/workers paused during the transactional 0004 index creation, which can
+block writes. Allow a maintenance window based on queue-table size, and verify
+runtime grants/readiness before restart. Downgrading 0004 preserves source data
+and claims but restores 0003's known starvation defect; prefer a forward fix and
+review before resuming sustained traffic. Downgrading 0003 removes operational
+claim coordination but preserves source messaging records. Pause workers before
+any reviewed rollback. All earlier TLS/owner separation rules still apply.
+
+The gateway functions and privileged indexing helpers require the metadata owner,
+SECURITY DEFINER and fixed `search_path=pg_catalog`. PUBLIC EXECUTE and runtime
+EXECUTE on trigger helpers are forbidden; do not fix a failure by granting
+execution on every function. No grant options are allowed. The validator rejects
+extra function execution rights and table/column rights (including `TRUNCATE`,
 `REFERENCES`, `TRIGGER`, and `MAINTAIN`), database CREATE/TEMP, public-schema
 CREATE, role memberships, privileged role attributes, ownership, and privileges
 on unapproved public relations or sequences. Grants inherited through PUBLIC
 count as effective privileges and can invalidate an otherwise limited role.
 
-The runtime check and readiness endpoint fail closed on drift. The grant helper
+The API readiness endpoint and runtime checks in API/worker operations fail
+closed on privilege drift, missing reviewed functions or missing forced RLS
+protections. API readiness does not establish worker liveness or queue health. The grant helper
 first checks this complete privilege boundary while allowing missing approved
 grants. Only after that succeeds does it add missing permissions and perform a
 strict postcheck, within the same transaction. Any error rolls back that
@@ -48,17 +94,21 @@ unauthorised administrative change.
 
 When provisioning or readiness reports unsafe permissions:
 
-1. Keep the API unavailable; do not switch it to an owner role or disable checks.
+1. Keep API and worker unavailable; do not switch either to an owner role or
+   disable checks.
 2. With an authorised administrative connection, inspect the runtime role's
    attributes, memberships and object ownership, along with database, public
-   schema, table and column ACLs. Include PUBLIC rights; direct role grants alone
-   do not establish the effective privilege set. `psql` inspection commands
-   `\du+`, `\l+`, `\dn+`, and `\dp public.*` are useful starting points.
+   schema, table, column and function ACLs. Include PUBLIC rights; direct role
+   grants alone do not establish the effective privilege set. Inspect gateway
+   function ownership, SECURITY DEFINER and configured search paths too. `psql`
+   commands `\du+`, `\l+`, `\dn+`, `\dp public.*` and `\df+ public.messaging_*`
+   are useful starting points.
 3. Investigate the source of drift and review the narrowly scoped corrective
    revocations or ownership changes. Apply only the approved changes through
    that administrative connection; preserve unrelated grants and user data.
 4. Rerun `scripts/grant_runtime.py` with the reviewed runtime and migration URLs,
-   then verify API readiness and the relevant isolation tests in staging.
+   then verify API readiness, worker operation and the relevant isolation tests
+   in staging.
 
 Missing approved permissions can be restored by rerunning the grant helper.
 Adding a table or changing a privilege needs a reviewed allowlist and policy
@@ -88,7 +138,7 @@ and must use the production identity provider and database CA authorities.
 ```sh
 docker compose up -d postgres
 docker compose run --rm migrate
-docker compose up -d api
+docker compose up -d api worker
 ```
 
 For host execution, review and export the private `.env` values, then run:
@@ -109,10 +159,10 @@ Never execute it against customer data as an informal rollback.
 ## Production database transport
 
 The commands above are for local development. A production release must supply
-`ANOIFIG_ENVIRONMENT=production` explicitly to **each** application, Alembic, and
-grant process. The application uses `ANOIFIG_DATABASE_URL`; Alembic uses
+`ANOIFIG_ENVIRONMENT=production` explicitly to **each** API, worker, Alembic and
+grant process. API and worker use `ANOIFIG_DATABASE_URL`; Alembic uses
 `ANOIFIG_MIGRATION_DATABASE_URL`; the grant helper needs both. Keep owner
-credentials in the reviewed release process, never in the application container.
+credentials in the reviewed release process, never in API or worker containers.
 Migration and grant commands read exported process variables and do not load
 `.env` files themselves. Production secrets belong in the approved secret-delivery
 system, not shell history, committed files, logs, or command-line arguments.
@@ -151,7 +201,7 @@ authorisation checks. Never expose migration credentials to an application user.
 
 ```sh
 docker compose --profile test run --build --rm tests
-docker compose logs postgres migrate api
+docker compose logs postgres migrate api worker
 ```
 
 Tests require distinct runtime/admin URLs for the same disposable database ending
@@ -159,10 +209,10 @@ in `_test`. Fixtures migrate and reset synthetic data in that database. Do not r
 concurrent suites against the same database unless isolation has been arranged.
 
 A connection error may mean PostgreSQL is not healthy or `.env` passwords differ
-from the initialized role passwords. A migration error stops API startup; inspect
+from the initialized role passwords. A migration error stops API and worker startup; inspect
 the migration logs and correct the prerequisite before retrying. RLS denials are
 expected without authenticated identity and tenant transaction context. Never
-resolve an RLS error by giving the API an owner URL or disabling policies.
+resolve an RLS error by giving API or worker an owner URL or disabling policies.
 
 ## Destructive disposable reset
 

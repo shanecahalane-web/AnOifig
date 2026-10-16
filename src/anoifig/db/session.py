@@ -13,9 +13,12 @@ from anoifig.db.connection_config import (
     verify_database_tls,
 )
 from anoifig.db.privileges import (
+    RUNTIME_TABLE_PRIVILEGES,
+    check_runtime_privileges,
+)
+from anoifig.db.privileges import (
     UnsafeDatabaseConfiguration as UnsafeDatabaseConfiguration,
 )
-from anoifig.db.privileges import check_runtime_privileges
 from anoifig.identity.auth import VerifiedIdentity
 
 
@@ -59,12 +62,13 @@ def check_runtime_database(connection: Connection, *, require_tls: bool = False)
               FROM pg_class c
               JOIN pg_namespace n ON n.oid = c.relnamespace
              WHERE n.nspname = 'public'
-               AND c.relname IN ('businesses', 'users', 'memberships', 'customers')
+               AND c.relname = ANY(:tables)
                AND c.relkind = 'r'
             """
-        )
+        ),
+        {"tables": list(RUNTIME_TABLE_PRIVILEGES)},
     ).all()
-    if len(tables) != 4 or any(
+    if len(tables) != len(RUNTIME_TABLE_PRIVILEGES) or any(
         not row.relrowsecurity or not row.relforcerowsecurity or row.owns_table or not row.policies
         for row in tables
     ):
@@ -77,9 +81,10 @@ def check_runtime_database(connection: Connection, *, require_tls: bool = False)
               JOIN pg_class c ON c.oid = p.polrelid
               JOIN pg_namespace n ON n.oid = c.relnamespace
              WHERE n.nspname = 'public'
-               AND c.relname IN ('businesses', 'users', 'memberships', 'customers')
+               AND c.relname = ANY(:tables)
             """
-        )
+        ),
+        {"tables": list(RUNTIME_TABLE_PRIVILEGES)},
     ).all()
     expected_policies = {
         ("users", "users_read_self"),
@@ -90,7 +95,42 @@ def check_runtime_database(connection: Connection, *, require_tls: bool = False)
         ("customers", "customers_update_writer"),
         ("customers", "customers_delete_writer"),
     }
+    expected_policies |= {
+        (table, f"{table}_{action}")
+        for table in ("phone_links", "conversations", "messages", "outbox")
+        for action in ("read_member", "insert_writer", "update_writer")
+    }
+    expected_policies |= {
+        ("phone_links", "phone_links_gateway_owner"),
+        ("message_jobs", "message_jobs_gateway_owner"),
+    }
     if {(row.relname, row.polname) for row in policies} != expected_policies:
+        raise UnsafeDatabaseConfiguration
+    triggers = connection.execute(
+        text(
+            """
+            SELECT c.relname, t.tgname, t.tgtype, t.tgenabled, p.proname
+              FROM pg_trigger t
+              JOIN pg_class c ON c.oid = t.tgrelid
+              JOIN pg_proc p ON p.oid = t.tgfoid
+             WHERE c.relnamespace = 'public'::regnamespace
+               AND c.relname = ANY(:tables) AND NOT t.tgisinternal
+            """
+        ),
+        {"tables": ["phone_links", "conversations", "messages", "outbox"]},
+    ).all()
+    # tgtype: ROW=1, BEFORE=2, INSERT=4, UPDATE=16. Index updates must
+    # run after source writes, while validation runs before inserts/updates.
+    expected_triggers = {
+        (table, "touch_updated_at", 19, "O", "touch_updated_at")
+        for table in ("phone_links", "conversations", "messages", "outbox")
+    }
+    expected_triggers |= {
+        ("phone_links", "messaging_guard_phone_link", 23, "O", "messaging_guard_phone_link"),
+        ("messages", "messaging_index_inbound", 21, "O", "messaging_index_inbound"),
+        ("outbox", "messaging_index_outbound", 21, "O", "messaging_index_outbound"),
+    }
+    if {tuple(row) for row in triggers} != expected_triggers:
         raise UnsafeDatabaseConfiguration
 
 

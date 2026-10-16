@@ -10,6 +10,7 @@ from conftest import ISSUER
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError, IntegrityError
 
+from anoifig.db.privileges import provision_runtime_grants
 from anoifig.db.session import UnsafeDatabaseConfiguration, check_runtime_database
 
 pytestmark = pytest.mark.integration
@@ -210,15 +211,6 @@ def test_migration_matches_models_and_is_reversible(database):
             )
         command.upgrade(config, "head")
     with database.admin.begin() as connection:
-        runtime_role = make_runtime_identifier(database)
-        for table in ("users", "businesses", "memberships"):
-            connection.execute(text(f"GRANT SELECT ON {table} TO {runtime_role}"))
-        connection.execute(
-            text(f"GRANT SELECT,INSERT,UPDATE,DELETE ON customers TO {runtime_role}")
-        )
+        from sqlalchemy.engine import make_url
 
-
-def make_runtime_identifier(database):
-    from sqlalchemy.engine import make_url
-
-    return database.admin.dialect.identifier_preparer.quote(make_url(database.runtime_url).username)
+        provision_runtime_grants(connection, make_url(database.runtime_url).username)
