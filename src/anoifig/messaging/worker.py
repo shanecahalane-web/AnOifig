@@ -27,6 +27,8 @@ from anoifig.messaging.provider import (
 )
 from anoifig.messaging.queue import PostgresWorkQueue, WorkQueue
 from anoifig.messaging.service import TARA_RESPONSE, Job, authorise_route, lookup_job
+from anoifig.tara.provider import AIProvider, build_provider
+from anoifig.tara.service import TaraService
 
 logger = logging.getLogger(__name__)
 MAX_ATTEMPTS = 5
@@ -49,9 +51,17 @@ class MessagingWorker:
         settings: Settings,
         provider: MessagingProvider,
         queue: WorkQueue | None = None,
+        ai_provider: AIProvider | None = None,
     ) -> None:
+        if settings.environment == "production" and settings.tara_mode != "openai":
+            raise ValueError("production workers require explicit OpenAI mode")
         self.engine, self.settings, self.provider = engine, settings, provider
         self.queue = queue if queue is not None else PostgresWorkQueue(engine, settings)
+        self.tara = (
+            TaraService(engine, settings, ai_provider or build_provider(settings))
+            if settings.tara_mode != "acknowledgement"
+            else None
+        )
 
     def _check(self, session: Session) -> None:
         check_runtime_database(
@@ -104,7 +114,8 @@ class MessagingWorker:
                     return True  # A deleted/tombstoned job needs no broker retry.
                 authorise_route(session, job.route)
                 if job.kind == "inbound":
-                    progressed = self._process_inbound(session, job)
+                    if self.tara is None:
+                        progressed = self._process_inbound(session, job)
                 else:
                     command, progressed = self._prepare_outbound(session, job)
         except AccessDenied:
@@ -117,6 +128,8 @@ class MessagingWorker:
             if job is not None and job.kind == "inbound":
                 return self._record_processing_failure(job)
             raise
+        if job is not None and job.kind == "inbound" and self.tara is not None:
+            return self.tara.process(job)
         if command is not None:
             self._send(command)
         return progressed
@@ -436,9 +449,13 @@ class MessagingWorker:
 def main() -> None:
     parser = argparse.ArgumentParser(description="An Oifig durable text messaging worker")
     parser.add_argument("--once", action="store_true", help="process one discovery batch")
-    parser.add_argument("--local", action="store_true", help="simulate delivery; no provider HTTP")
+    parser.add_argument(
+        "--local", action="store_true", help="simulate WhatsApp delivery; AI mode is separate"
+    )
     args = parser.parse_args()
     settings = get_settings()
+    if settings.environment == "production" and settings.tara_mode != "openai":
+        parser.error("production workers require explicit OpenAI mode")
     provider: MessagingProvider
     if args.local:
         if settings.environment == "production":
@@ -447,8 +464,12 @@ def main() -> None:
     else:
         if not settings.twilio_enabled:
             parser.error("enable and configure Twilio, or explicitly select --local")
-        assert settings.twilio_account_sid and settings.twilio_auth_token
-        assert settings.twilio_whatsapp_number
+        if not (
+            settings.twilio_account_sid
+            and settings.twilio_auth_token
+            and settings.twilio_whatsapp_number
+        ):
+            parser.error("Twilio configuration is incomplete")
         provider = TwilioMessagingProvider(
             account_sid=settings.twilio_account_sid.get_secret_value(),
             auth_token=settings.twilio_auth_token.get_secret_value(),

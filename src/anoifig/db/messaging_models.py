@@ -91,6 +91,21 @@ class Message(TimestampMixin, Base):
     __table_args__ = (
         UniqueConstraint("tenant_id", "id", name="uq_messages_tenant_id_id"),
         UniqueConstraint("tenant_id", "id", "phone_link_id", name="uq_messages_tenant_id_id_link"),
+        UniqueConstraint(
+            "tenant_id",
+            "id",
+            "conversation_id",
+            "user_id",
+            name="uq_messages_tenant_id_id_conversation_user",
+        ),
+        Index(
+            "ix_messages_pending_conversation",
+            "tenant_id",
+            "conversation_id",
+            "received_at",
+            "id",
+            postgresql_where=text("direction = 'inbound' AND processed_at IS NULL"),
+        ),
         UniqueConstraint("twilio_sid", name="uq_messages_twilio_sid"),
         UniqueConstraint("reply_to_id", name="uq_messages_reply_to_id"),
         ForeignKeyConstraint(

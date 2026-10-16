@@ -10,7 +10,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from anoifig.db.messaging_models import Conversation, Message, PhoneLink
+from anoifig.db.messaging_models import Conversation, Message, Outbox, PhoneLink
 from anoifig.db.session import set_identity_context
 from anoifig.identity.auth import VerifiedIdentity
 from anoifig.identity.service import AccessDenied, TenantAccess, authorise_tenant
@@ -205,6 +205,7 @@ def accept_inbound(session: Session, payload: InboundPayload) -> UUID | None:
     )
     if conversation is None:
         raise AccessDenied
+    now = datetime.now(UTC)
     message_id = session.scalar(
         insert(Message)
         .values(
@@ -227,3 +228,46 @@ def accept_inbound(session: Session, payload: InboundPayload) -> UUID | None:
     if message_id is not None:
         conversation.last_inbound_at = now
     return message_id
+
+
+def reply_to_inbound(
+    session: Session, message: Message, body: str, *, error_code: str | None = None
+) -> None:
+    """Persist a single reply/outbox together with source completion in one transaction.
+
+    The authorised caller must hold the conversation and source-message locks.
+    Unique reply_to_id/outbox constraints remain the final idempotency boundary.
+    """
+    existing = session.scalar(
+        select(Message.id).where(
+            Message.tenant_id == message.tenant_id,
+            Message.reply_to_id == message.id,
+        )
+    )
+    if existing is None:
+        response = Message(
+            id=uuid4(),
+            tenant_id=message.tenant_id,
+            conversation_id=message.conversation_id,
+            phone_link_id=message.phone_link_id,
+            user_id=message.user_id,
+            direction="outbound",
+            body=body,
+            account_sid=message.account_sid,
+            status="pending",
+            reply_to_id=message.id,
+        )
+        session.add(response)
+        session.flush()
+        session.add(
+            Outbox(
+                id=uuid4(),
+                tenant_id=message.tenant_id,
+                message_id=response.id,
+                phone_link_id=message.phone_link_id,
+            )
+        )
+    message.processed_at = datetime.now(UTC)
+    message.status = "processed"
+    message.processing_attempts += 1
+    message.processing_error = error_code
