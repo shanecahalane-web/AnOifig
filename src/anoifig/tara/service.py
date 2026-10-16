@@ -2,13 +2,12 @@
 
 import json
 import logging
-import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import ROUND_UP, Decimal
 from uuid import UUID, uuid4
 
-from sqlalchemy import Engine, or_, select
+from sqlalchemy import Engine, literal, select, tuple_
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -18,12 +17,14 @@ from anoifig.db.session import check_runtime_database
 from anoifig.db.tara_models import TaraRun, TaraState, TaraUsage
 from anoifig.identity.service import AccessDenied
 from anoifig.messaging.service import Job, authorise_route, reply_to_inbound
+from anoifig.tara.privacy import minimise
 from anoifig.tara.prompt import INSTRUCTIONS, PROMPT_VERSION
 from anoifig.tara.provider import AIProvider, AIRequest, AIResult
 from anoifig.tara.schemas import (
     Decision,
     Intent,
     InvoiceNotes,
+    PendingClarification,
     ProposedNotes,
     Reply,
     apply_proposal,
@@ -55,6 +56,7 @@ class Command:
     message_id: UUID
     token: UUID
     request: AIRequest
+    expected_version: int
 
 
 class TaraService:
@@ -139,9 +141,7 @@ class TaraService:
             if min(state.updated_at, state.memory_since) < now - timedelta(
                 days=self.settings.tara_memory_days
             ):
-                state.notes = {}
-                state.memory_since = now
-                state.version += 1
+                self._clear_memory(state, message)
             run = session.get(TaraRun, message.id)
             if run is not None:
                 if run.status == "complete":
@@ -165,12 +165,11 @@ class TaraService:
                 usage_day=now.date(),
                 reserved_tokens=0,
                 reserved_cost=Decimal("0"),
+                expected_version=state.version,
             )
             session.add(run)
             if message.body.strip().casefold() in FORGET_COMMANDS:
-                state.notes = {}
-                state.memory_since = now
-                state.version += 1
+                self._clear_memory(state, message)
                 run.action = "memory_cleared"
                 self._finish(
                     session,
@@ -185,47 +184,113 @@ class TaraService:
             try:
                 notes = InvoiceNotes.model_validate(state.notes)
             except ValueError:
-                state.notes = {}
-                state.memory_since = now
-                state.version += 1
+                self._clear_memory(state, message)
                 self._finish(session, message, state, run, INVALID, "state_invalid")
                 return True
-            history: tuple[dict[str, str], ...] = ()
-            if self.settings.tara_history_messages:
-                history_rows = list(
-                    session.scalars(
-                        select(Message)
-                        .where(
-                            Message.tenant_id == message.tenant_id,
-                            Message.conversation_id == message.conversation_id,
-                            Message.received_at
-                            >= max(
-                                state.memory_since,
-                                now - timedelta(days=self.settings.tara_memory_days),
-                            ),
-                            Message.id != message.id,
-                            or_(Message.processed_at.is_not(None), Message.direction == "outbound"),
-                        )
-                        .order_by(Message.received_at.desc(), Message.id.desc())
-                        .limit(self.settings.tara_history_messages)
-                    )
-                )
-                history = tuple(
-                    {"role": row.direction, "text": row.body[:600]}
-                    for row in reversed(history_rows)
-                )
+            history = self._history(session, message, state, notes, now)
             provider_notes = notes.model_dump(mode="json", exclude={"customer_details"})
-            request = AIRequest(provider_notes, history, message.body)
+            # Contact fields can appear in other free-text note fields too.
+            for field, value in provider_notes.items():
+                if isinstance(value, str):
+                    provider_notes[field] = minimise(value, contact_details=notes.customer_details)
+            for item in provider_notes["line_items"]:
+                item["description"] = minimise(
+                    item["description"], contact_details=notes.customer_details
+                )
+            request = AIRequest(
+                provider_notes, history, message.body, state.version, state.pending_clarification
+            )
             while self._input_bound(request) > self.settings.tara_max_input_tokens and history:
                 history = history[1:]
-                request = AIRequest(provider_notes, history, message.body)
+                request = AIRequest(
+                    provider_notes,
+                    history,
+                    message.body,
+                    state.version,
+                    state.pending_clarification,
+                )
             if self._input_bound(request) > self.settings.tara_max_input_tokens:
                 self._finish(session, message, state, run, INVALID, "context_limit")
                 return True
             if not self._reserve(session, run):
                 self._finish(session, message, state, run, BUDGET, "budget_exceeded")
                 return True
-            return Command(job, message.id, run.token, request)
+            return Command(job, message.id, run.token, request, state.version)
+
+    @staticmethod
+    def _clear_memory(state: TaraState, message: Message) -> None:
+        # Acceptance position is durable even if following messages are already queued.
+        state.notes, state.pending_clarification = {}, None
+        state.memory_since, state.memory_after_id = message.received_at, message.id
+        state.version += 1
+
+    def _history(
+        self,
+        session: Session,
+        message: Message,
+        state: TaraState,
+        notes: InvoiceNotes,
+        now: datetime,
+    ) -> tuple[dict[str, str], ...]:
+        if not self.settings.tara_history_messages:
+            return ()
+        query = (
+            select(Message, TaraRun.intent)
+            .outerjoin(
+                TaraRun,
+                (TaraRun.message_id == Message.id) & (TaraRun.tenant_id == Message.tenant_id),
+            )
+            .where(
+                Message.tenant_id == message.tenant_id,
+                Message.conversation_id == message.conversation_id,
+                Message.direction == "inbound",
+                Message.processed_at.is_not(None),
+                Message.received_at >= now - timedelta(days=self.settings.tara_memory_days),
+                tuple_(Message.received_at, Message.id)
+                < tuple_(literal(message.received_at), literal(message.id)),
+            )
+        )
+        if state.memory_after_id is not None:
+            query = query.where(
+                tuple_(Message.received_at, Message.id)
+                > tuple_(literal(state.memory_since), literal(state.memory_after_id))
+            )
+        else:
+            query = query.where(Message.received_at >= state.memory_since)
+        rows = list(
+            session.execute(
+                query.order_by(Message.received_at.desc(), Message.id.desc()).limit(
+                    self.settings.tara_history_messages
+                )
+            )
+        )
+        # Structured notes and pending clarification carry application state. Replaying
+        # outbound prose adds PII and stale financial questions without new facts.
+        return tuple(
+            {
+                "role": "inbound",
+                "text": (
+                    "[customer contact turn omitted]"
+                    if intent == "customer_information"
+                    else minimise(row.body, contact_details=notes.customer_details)[:600]
+                ),
+            }
+            for row, intent in reversed(rows)
+        )
+
+    @staticmethod
+    def _pending(notes: InvoiceNotes) -> PendingClarification | None:
+        if not notes.customer_name or (not notes.work_description and not notes.line_items):
+            return None
+        if not notes.line_items and not any(
+            value is not None for value in (notes.amount, notes.labour, notes.materials)
+        ):
+            return None
+        if notes.vat_basis is None:
+            return "vat_basis"
+        if notes.vat_basis != "no_vat" and notes.vat_rate is None:
+            return "vat_rate"
+        return None
 
     @staticmethod
     def _input_bound(request: AIRequest) -> int:
@@ -314,6 +379,11 @@ class TaraService:
                 return True
             if run.expires_at <= datetime.now(UTC):
                 result, error = None, "processing_interrupted"
+            if (
+                state.version != command.expected_version
+                or run.expected_version != command.expected_version
+            ):
+                result, error = None, "stale_state"
             body = FALLBACK
             if result is not None:
                 try:
@@ -348,28 +418,92 @@ class TaraService:
             # This is the complete action allowlist. No model-supplied IDs or SQL.
             authorise_route(session, job.route)
             notes = apply_proposal(
-                InvoiceNotes.model_validate(state.notes), decision.proposal, message.body
+                InvoiceNotes.model_validate(state.notes),
+                decision.proposal,
+                message.body,
+                pending_clarification=self._validated_pending(state.pending_clarification),
+                expected_version=run.expected_version,
+                current_version=state.version,
             )
             state.notes = notes.model_dump(mode="json")
             state.version += 1
+            state.pending_clarification = self._pending(notes)
             run.intent, run.action = decision.proposal.intent, "notes_merged"
             return render_notes(notes, correction=decision.proposal.intent == "correction")
         if decision.reply is None:
             raise ValueError("missing structured reply")
         run.intent, run.action = decision.reply.intent.value, "reply"
         if decision.reply.intent in {Intent.UNSUPPORTED, Intent.FUNCTIONALITY}:
+            state.pending_clarification = None
             return CAPABILITIES
         if decision.reply.intent != Intent.GENERAL:
-            return render_notes(InvoiceNotes.model_validate(state.notes))
-        # Free-form social replies cannot claim a state-changing operation or
-        # introduce links. Invoice/capability replies use application templates.
-        if re.search(
-            r"\b(?:sent|issued|created|generated|scheduled|paid|charged|processed)\b|https?://",
-            decision.reply.text,
-            re.IGNORECASE,
-        ):
-            return CAPABILITIES
-        return decision.reply.text
+            notes = InvoiceNotes.model_validate(state.notes)
+            state.pending_clarification = self._pending(notes)
+            return render_notes(notes)
+        # Only backend-supported speech acts are rendered. Model prose is never
+        # evidence that any business operation happened.
+        state.pending_clarification = None
+        return {
+            "greeting": "Hi! What can I help you prepare today?",
+            "thanks": "You're welcome. Let me know if you'd like to add or correct anything.",
+            "check_in": "I'm here and ready to help. What would you like to work on?",
+            "acknowledgement": "Okay. You can add details or tell me what needs correcting.",
+            "help": (
+                "Ready to help. I can collect and correct invoice preparation notes. "
+                "What would you like to work on?"
+            ),
+        }[decision.reply.social_act]
+
+    @staticmethod
+    def _validated_pending(value: str | None) -> PendingClarification | None:
+        if value in {"vat_basis", "vat_rate"}:
+            return "vat_basis" if value == "vat_basis" else "vat_rate"
+        return None
+
+    def complete_processing_failure(self, session: Session, job: Job, message: Message) -> None:
+        """Terminal bounded recovery; caller holds conversation then source locks.
+
+        Never re-invoke the provider or refund a committed/ambiguous reservation.
+        Completing the run fences any in-flight result, even before its deadline.
+        """
+        self._authorise(session, job)
+        attempts = message.processing_attempts
+        state = session.get(TaraState, message.conversation_id)
+        now = datetime.now(UTC)
+        if state is None:
+            state = TaraState(
+                conversation_id=message.conversation_id,
+                tenant_id=message.tenant_id,
+                user_id=message.user_id,
+                notes={},
+                version=0,
+                memory_since=message.received_at,
+                updated_at=now,
+            )
+            session.add(state)
+        if state.user_id != message.user_id:
+            raise AccessDenied
+        run = session.get(TaraRun, message.id, with_for_update=True)
+        if run is None:
+            run = TaraRun(
+                message_id=message.id,
+                tenant_id=message.tenant_id,
+                conversation_id=message.conversation_id,
+                user_id=message.user_id,
+                token=uuid4(),
+                expires_at=now,
+                status="processing",
+                model=self.settings.tara_model if self.settings.tara_mode == "openai" else "mock",
+                prompt_version=PROMPT_VERSION,
+                started_at=now,
+                usage_day=now.date(),
+                reserved_tokens=0,
+                reserved_cost=Decimal("0"),
+                expected_version=state.version,
+            )
+            session.add(run)
+        self._finish(session, message, state, run, FALLBACK, "processing_failed")
+        message.processing_attempts = attempts
 
     @staticmethod
     def _finish(
@@ -382,8 +516,13 @@ class TaraService:
     ) -> None:
         now = datetime.now(UTC)
         run.status, run.completed_at, run.error_code = "complete", now, error
+        if error:
+            state.pending_clarification = None
         state.updated_at = now
-        reply_to_inbound(session, message, body, error_code=error)
+        message.conversation_version = state.version
+        reply_to_inbound(
+            session, message, body, error_code=error, conversation_version=state.version
+        )
         if error:
             logger.info(
                 "Tara turn completed with fallback",

@@ -7,9 +7,9 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
-from sqlalchemy import Engine, select, text
+from sqlalchemy import Engine, func, literal, select, text, tuple_
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from anoifig.config import Settings, get_settings
 from anoifig.db.messaging_models import Conversation, Message, Outbox
@@ -118,6 +118,11 @@ class MessagingWorker:
                         progressed = self._process_inbound(session, job)
                 else:
                     command, progressed = self._prepare_outbound(session, job)
+            if job is not None and job.kind == "inbound" and self.tara is not None:
+                # Preparation and completion use their own transactions around
+                # provider I/O. Their failures still need the bounded inbound
+                # retry ledger; a committed Tara run prevents a second AI call.
+                return self.tara.process(job)
         except AccessDenied:
             raise
         except SQLAlchemyError:
@@ -128,8 +133,6 @@ class MessagingWorker:
             if job is not None and job.kind == "inbound":
                 return self._record_processing_failure(job)
             raise
-        if job is not None and job.kind == "inbound" and self.tara is not None:
-            return self.tara.process(job)
         if command is not None:
             self._send(command)
         return progressed
@@ -190,6 +193,22 @@ class MessagingWorker:
         with Session(self.engine) as session, session.begin():
             self._check(session)
             authorise_route(session, job.route)
+            conversation = session.scalar(
+                select(Conversation)
+                .where(
+                    Conversation.tenant_id == job.route.tenant_id,
+                    Conversation.id
+                    == select(Message.conversation_id)
+                    .where(
+                        Message.id == job.entity_id,
+                        Message.tenant_id == job.route.tenant_id,
+                    )
+                    .scalar_subquery(),
+                )
+                .with_for_update()
+            )
+            if conversation is None:
+                return False
             message = session.scalar(
                 select(Message)
                 .where(
@@ -202,11 +221,30 @@ class MessagingWorker:
                 return False
             if message.processed_at is not None:
                 return True
+            if self.tara is not None:
+                first = session.scalar(
+                    select(Message.id)
+                    .where(
+                        Message.tenant_id == message.tenant_id,
+                        Message.conversation_id == message.conversation_id,
+                        Message.direction == "inbound",
+                        Message.processed_at.is_(None),
+                    )
+                    .order_by(Message.received_at, Message.id)
+                    .limit(1)
+                )
+                if first != message.id:
+                    # A preparation failure can happen before Tara performs its
+                    # own head check. Never complete a later turn out of order.
+                    return False
             message.processing_attempts += 1
             message.processing_error = "processing_failed"
             if message.processing_attempts >= MAX_ATTEMPTS:
-                message.processed_at = datetime.now(UTC)
-                message.status = "failed"
+                if self.tara is not None:
+                    self.tara.complete_processing_failure(session, job, message)
+                else:
+                    message.processed_at = datetime.now(UTC)
+                    message.status = "failed"
             else:
                 message.available_at = datetime.now(UTC) + timedelta(
                     seconds=min(3600, 2**message.processing_attempts),
@@ -215,6 +253,11 @@ class MessagingWorker:
 
     def _prepare_outbound(self, session: Session, job: Job) -> tuple[SendCommand | None, bool]:
         _, link = authorise_route(session, job.route)
+        # One conversation lock serialises dispatch preparation across every
+        # outbox in the conversation. Provider I/O is still outside transactions.
+        conversation = self._lock_outbound_conversation(session, job, skip_locked=True)
+        if conversation is None:
+            return None, False
         outbox = session.scalar(
             select(Outbox)
             .where(
@@ -249,16 +292,8 @@ class MessagingWorker:
             return None, True
         if outbox.available_at > now:
             return None, False
-        conversation = session.scalar(
-            select(Conversation).where(
-                Conversation.id == message.conversation_id,
-                Conversation.tenant_id == message.tenant_id,
-            )
-        )
-        if (
-            conversation is None
-            or conversation.last_inbound_at is None
-            or conversation.last_inbound_at <= now - timedelta(hours=24)
+        if conversation.last_inbound_at is None or conversation.last_inbound_at <= now - timedelta(
+            hours=24
         ):
             outbox.status = "blocked"
             message.status = "blocked"
@@ -269,6 +304,11 @@ class MessagingWorker:
             message.status = "failed"
             outbox.last_error = message.processing_error = "retry_exhausted"
             return None, True
+        if self._has_unresolved_predecessor(session, message):
+            # In particular, a delayed retry or an ambiguous external send must
+            # not be overtaken by a later financial correction. Uncertain sends
+            # require callback/operator reconciliation, never an automatic retry.
+            return None, False
         outbox.status = "dispatching"
         outbox.attempts += 1
         outbox.dispatch_started_at = now
@@ -289,11 +329,69 @@ class MessagingWorker:
             True,
         )
 
+    @staticmethod
+    def _lock_outbound_conversation(
+        session: Session, job: Job, *, skip_locked: bool = False
+    ) -> Conversation | None:
+        return session.scalar(
+            select(Conversation)
+            .join(
+                Message,
+                (Message.conversation_id == Conversation.id)
+                & (Message.tenant_id == Conversation.tenant_id),
+            )
+            .join(
+                Outbox,
+                (Outbox.message_id == Message.id) & (Outbox.tenant_id == Message.tenant_id),
+            )
+            .where(Outbox.id == job.entity_id, Outbox.tenant_id == job.route.tenant_id)
+            .with_for_update(of=Conversation, skip_locked=skip_locked)
+        )
+
+    @staticmethod
+    def _has_unresolved_predecessor(session: Session, message: Message) -> bool:
+        """Compare durable inbound turn positions, including equal-time UUID ties.
+
+        Historical outbound records without reply_to_id use their own durable
+        position. Processing/creation time and optional state-version metadata
+        cannot change the order of replies to accepted inbound messages.
+        """
+        source = session.get(Message, message.reply_to_id) if message.reply_to_id else None
+        position = (source.received_at, source.id) if source else (message.received_at, message.id)
+        prior_reply, prior_source = aliased(Message), aliased(Message)
+        earlier = session.scalar(
+            select(Outbox.id)
+            .join(
+                prior_reply,
+                (prior_reply.id == Outbox.message_id) & (prior_reply.tenant_id == Outbox.tenant_id),
+            )
+            .outerjoin(
+                prior_source,
+                (prior_source.id == prior_reply.reply_to_id)
+                & (prior_source.tenant_id == prior_reply.tenant_id),
+            )
+            .where(
+                Outbox.tenant_id == message.tenant_id,
+                prior_reply.conversation_id == message.conversation_id,
+                Outbox.status.in_(("pending", "retry", "dispatching", "uncertain")),
+                tuple_(
+                    func.coalesce(prior_source.received_at, prior_reply.received_at),
+                    func.coalesce(prior_source.id, prior_reply.id),
+                )
+                < tuple_(literal(position[0]), literal(position[1])),
+            )
+            .limit(1)
+        )
+        return earlier is not None
+
     def _dispatch_allowed(self, command: SendCommand) -> bool:
         """Check the committed intent again immediately before provider I/O."""
         with Session(self.engine) as session, session.begin():
             self._check(session)
             authorise_route(session, command.job.route)
+            conversation = self._lock_outbound_conversation(session, command.job)
+            if conversation is None:
+                return False
             outbox = session.scalar(
                 select(Outbox)
                 .where(
@@ -309,10 +407,12 @@ class MessagingWorker:
             ):
                 return False
             message = session.scalar(
-                select(Message).where(
+                select(Message)
+                .where(
                     Message.id == outbox.message_id,
                     Message.tenant_id == outbox.tenant_id,
                 )
+                .with_for_update()
             )
             if message is None:
                 raise AccessDenied
@@ -322,19 +422,18 @@ class MessagingWorker:
                 outbox.last_error = message.processing_error = "dispatch_interrupted"
                 outbox.lease_until = None
                 return False
-            conversation = session.scalar(
-                select(Conversation).where(
-                    Conversation.id == message.conversation_id,
-                    Conversation.tenant_id == message.tenant_id,
-                )
-            )
             if (
-                conversation is None
-                or conversation.last_inbound_at is None
+                conversation.last_inbound_at is None
                 or conversation.last_inbound_at <= now - timedelta(hours=24)
             ):
                 outbox.status = message.status = "blocked"
                 outbox.last_error = message.processing_error = "template_required"
+                outbox.lease_until = None
+                return False
+            if self._has_unresolved_predecessor(session, message):
+                # Recheck after the durable dispatch commit and before I/O.
+                # This can arise with retained records created by older workers.
+                outbox.status = "retry"
                 outbox.lease_until = None
                 return False
             return True
@@ -358,6 +457,8 @@ class MessagingWorker:
         with Session(self.engine) as session, session.begin():
             self._check(session)
             authorise_route(session, command.job.route)
+            if self._lock_outbound_conversation(session, command.job) is None:
+                return
             outbox = session.scalar(
                 select(Outbox)
                 .where(

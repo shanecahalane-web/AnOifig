@@ -1,10 +1,12 @@
 """Exercise the real supported SDK over an in-memory HTTP transport, never an API."""
 
+import asyncio
 import json
+import time
 
 import httpx
 import pytest
-from openai import OpenAI
+from openai import AsyncOpenAI
 from pydantic import ValidationError
 
 from anoifig.config import Settings
@@ -55,11 +57,11 @@ def completion(message=None, **overrides):
 
 
 def provider(settings, handler):
-    client = OpenAI(
+    client = AsyncOpenAI(
         api_key="synthetic-key-never-sent",
         max_retries=settings.tara_max_retries,
         timeout=settings.tara_timeout_seconds,
-        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
     )
     return OpenAIProvider(settings, client=client)
 
@@ -85,6 +87,37 @@ def test_sdk_structured_response_and_secure_request(settings):
     assert len(payload["tools"]) == 1
     assert payload["tools"][0]["function"]["name"] == "propose_invoice_notes"
     assert "tenant_id" not in json.dumps(payload)
+
+
+def test_payload_binds_proposals_to_state_and_pending_question():
+    request = AIRequest({}, (), "23", state_version=7, pending_clarification="vat_rate")
+    payload = json.loads(request.payload())
+    assert payload["state_version"] == 7
+    assert payload["pending_clarification"] == "vat_rate"
+    assert payload["current_message"] == "23"
+
+
+def test_worker_calls_create_and_close_distinct_async_clients(settings, monkeypatch):
+    clients = []
+
+    def make_client(**kwargs):
+        assert kwargs["timeout"] == settings.tara_timeout_seconds
+        assert kwargs["max_retries"] == settings.tara_max_retries
+        client = AsyncOpenAI(
+            **kwargs,
+            http_client=httpx.AsyncClient(
+                transport=httpx.MockTransport(lambda _: httpx.Response(200, json=completion()))
+            ),
+        )
+        clients.append(client)
+        return client
+
+    monkeypatch.setattr("anoifig.tara.provider.AsyncOpenAI", make_client)
+    subject = OpenAIProvider(settings)
+    subject.respond(REQUEST)
+    subject.respond(REQUEST)
+    assert len(clients) == 2 and clients[0] is not clients[1]
+    assert all(client.is_closed() for client in clients)
 
 
 def tool_message(name="propose_invoice_notes", **argument_overrides):
@@ -143,7 +176,11 @@ def test_sdk_rejects_untrusted_outputs(settings, case):
 @pytest.mark.parametrize("mode", ["timeout", "server_error", "rate_limit"])
 def test_bounded_sdk_retries_and_generic_failures(settings, monkeypatch, mode):
     calls = []
-    monkeypatch.setattr("openai._base_client.time.sleep", lambda _: None)
+
+    async def no_retry_delay(_):
+        return None
+
+    monkeypatch.setattr("openai._base_client.anyio.sleep", no_retry_delay)
 
     def handler(request):
         calls.append(request)
@@ -158,6 +195,61 @@ def test_bounded_sdk_retries_and_generic_failures(settings, monkeypatch, mode):
         provider(settings, handler).respond(REQUEST)
     assert len(calls) == settings.tara_max_retries + 1
     assert str(captured.value) == ""
+
+
+def test_overall_deadline_cancels_inflight_io_and_closes_client(settings):
+    # An async transport models I/O which has not reached its per-request timeout.
+    # The smaller wall-clock deadline must cancel it, rather than leave a thread
+    # or detached future making calls after the application returned its fallback.
+    settings = settings.model_copy(update={"tara_deadline_seconds": 1})
+    calls = []
+    cancelled = []
+    finished = []
+
+    async def handler(request):
+        calls.append(request)
+        try:
+            await asyncio.sleep(60)
+        except asyncio.CancelledError:
+            cancelled.append(True)
+            raise
+        finished.append(True)
+        return httpx.Response(200, json=completion())
+
+    subject = provider(settings, handler)
+    started = time.monotonic()
+    with pytest.raises(ProviderFailure) as captured:
+        subject.respond(REQUEST)
+    assert time.monotonic() - started < 2
+    assert len(calls) == 1 and cancelled == [True] and finished == []
+    assert subject.client.is_closed()
+    assert str(captured.value) == ""
+    # Moving time forward in another event loop cannot resume cancelled work.
+    asyncio.run(asyncio.sleep(0.06))
+    assert len(calls) == 1 and finished == []
+
+
+def test_overall_deadline_cancels_retry_after_wait_before_another_call(settings):
+    settings = settings.model_copy(update={"tara_deadline_seconds": 1, "tara_max_retries": 2})
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        return httpx.Response(
+            429,
+            headers={"retry-after": "60"},
+            json={"error": {"message": "private details", "type": "rate_limit"}},
+        )
+
+    subject = provider(settings, handler)
+    started = time.monotonic()
+    with pytest.raises(ProviderFailure) as captured:
+        subject.respond(REQUEST)
+    assert time.monotonic() - started < 2
+    assert len(calls) == 1 and subject.client.is_closed()
+    assert str(captured.value) == ""
+    asyncio.run(asyncio.sleep(0.06))
+    assert len(calls) == 1
 
 
 @pytest.mark.parametrize(
@@ -201,6 +293,8 @@ def test_non_euro_currency_and_invented_fields_are_not_supported():
         {"tara_input_price_usd": "0"},
         {"tara_output_price_usd": "NaN"},
         {"tara_max_retries": 10},
+        {"tara_deadline_seconds": 0},
+        {"tara_deadline_seconds": 120},
         {"tara_memory_days": 1000},
     ],
 )

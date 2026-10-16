@@ -53,6 +53,7 @@ class Settings(BaseSettings):
     openai_api_key: SecretStr | None = None
     tara_model: str = Field(default="gpt-4.1-mini", min_length=1, max_length=100)
     tara_timeout_seconds: int = Field(default=15, ge=1, le=30)
+    tara_deadline_seconds: int = Field(default=60, ge=1, le=90)
     tara_max_retries: int = Field(default=1, ge=0, le=2)
     tara_max_input_tokens: int = Field(default=16000, ge=1000, le=64000)
     tara_max_output_tokens: int = Field(default=1200, ge=128, le=4000)

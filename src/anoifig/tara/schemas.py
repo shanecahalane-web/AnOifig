@@ -1,6 +1,7 @@
 """Untrusted model contracts and deterministic invoice-note validation."""
 
 import re
+from dataclasses import dataclass
 from decimal import Decimal
 from enum import StrEnum
 from typing import Annotated, Literal
@@ -98,6 +99,21 @@ class NoteChange(StrictModel):
     evidence: str = Field(min_length=1, max_length=4096)
 
 
+class LineItemChange(StrictModel):
+    field: Literal["description", "quantity", "unit_price"]
+    value: str = Field(min_length=1, max_length=300)
+    evidence: str = Field(min_length=1, max_length=4096)
+
+
+class LineItemPatch(StrictModel):
+    """Select an existing item within the application-bound notes version."""
+
+    index: int = Field(ge=0, lt=20)
+    description: str = Field(min_length=1, max_length=300, pattern=r"\S")
+    evidence: str = Field(min_length=1, max_length=4096)
+    changes: list[LineItemChange] = Field(min_length=1, max_length=3)
+
+
 class ProposedNotes(StrictModel):
     """The sole permitted tool: propose changes, never write or issue invoices."""
 
@@ -105,11 +121,13 @@ class ProposedNotes(StrictModel):
     changes: list[NoteChange] = Field(max_length=12)
     line_items: Annotated[list[LineItem], Field(min_length=1, max_length=20)] | None
     line_items_evidence: Annotated[str, Field(min_length=1, max_length=4096)] | None
+    line_item_patches: list[LineItemPatch] = Field(default_factory=list, max_length=20)
 
 
 class Reply(StrictModel):
     intent: Intent
     text: str = Field(min_length=1, max_length=700, pattern=r"\S")
+    social_act: Literal["greeting", "thanks", "check_in", "acknowledgement", "help"] = "help"
 
 
 class Decision(StrictModel):
@@ -117,51 +135,277 @@ class Decision(StrictModel):
     proposal: ProposedNotes | None = None
 
 
-def numeric_evidence(value: str, evidence: str) -> bool:
-    """Compare complete decimal tokens; 500 cannot be grounded in 1500 or -500."""
-    if re.search(r"[£$]|\b(?:GBP|USD)\b", evidence, re.IGNORECASE):
-        return False
-    # Familiar shorthand is expanded deterministically, never by model arithmetic.
-    normalised = re.sub(r"(?<=[0-9])[xX×](?=[0-9])", " x ", evidence)
-    tokens = re.findall(
-        r"(?<![\w.,])([+-]?[0-9]+(?:,[0-9]{3})*(?:\.[0-9]+)?)(k)?"
-        r"(?:euros?|eur|e)?(?![\w]|[.,][0-9])",
+@dataclass(frozen=True)
+class _NumericToken:
+    start: int
+    end: int
+    value: Decimal
+
+
+def _evidence_spans(message: str, evidence: str) -> list[tuple[int, int]]:
+    # Keep offsets in the original message: parsing a model-selected substring
+    # would lose an omitted currency, sign, decimal suffix or exponent.
+    spans: list[tuple[int, int]] = []
+    offset = 0
+    while (start := message.find(evidence, offset)) != -1:
+        spans.append((start, start + len(evidence)))
+        offset = start + 1
+    return spans
+
+
+def _numeric_tokens(message: str, *, allow_percentage: bool = False) -> list[_NumericToken]:
+    # Replace multiplication separators without changing original-message offsets.
+    normalised = re.sub(r"(?<=[0-9])[xX×](?=[0-9])", " ", message)
+    unsupported = [
+        match.span()
+        for match in re.finditer(r"\b[0-9]+(?:\.[0-9]+)?\s*[eE]\s*[+\-]?\s*[0-9]+\b", message)
+    ]
+    unsupported.extend(
+        match.span(1)
+        for match in re.finditer(r"(?=(\b[0-9][0-9.,]*\s*[+*/=\-]\s*€?\s*[0-9][0-9.,]*))", message)
+    )
+    tokens: list[_NumericToken] = []
+    for match in re.finditer(
+        r"(?<![\w.,])(?P<number>[+-]?[0-9]+(?:,[0-9]{3})*(?:\.[0-9]+)?)"
+        r"(?P<scale>k)?(?:euros?|eur|e)?(?![\w]|[.,][0-9])",
         normalised,
         re.IGNORECASE,
-    )
-    return any(
-        Decimal(token.replace(",", "")) * (1000 if suffix else 1) == money(value)
-        for token, suffix in tokens
+    ):
+        prefix, suffix = message[: match.start()], message[match.end() :]
+        if (
+            match.group("number").startswith(("-", "+"))
+            or ("." in match.group("number") and len(match.group("number").rsplit(".", 1)[1]) > 2)
+            or re.search(r"[+\-−–]\s*(?:€\s*)?$", prefix)
+            or re.search(r"\b(?:minus|negative)\s*(?:€\s*)?$", prefix, re.I)
+            or re.search(
+                r"(?:[£$¥₹₽₩₿]|\b(?:GBP|USD|CAD|AUD|NZD|CHF|JPY|CNY|dollars?|pounds?))"
+                r"\s*(?:€\s*)?$",
+                prefix,
+                re.I,
+            )
+            or re.match(
+                r"\s*(?:[£$¥₹₽₩₿]|(?:GBP|USD|CAD|AUD|NZD|CHF|JPY|CNY|dollars?|pounds?)\b)",
+                suffix,
+                re.I,
+            )
+            or re.search(r"\b0[xX][0-9a-fA-F]+\b", message[max(0, match.start() - 2) : match.end()])
+            or any(left <= match.start() < right for left, right in unsupported)
+            or (not allow_percentage and re.match(r"\s*(?:%|per\s*cent\b)", suffix, re.I))
+            or re.match(r"\.[.\s]*[0-9]", suffix)
+            or (
+                re.search(r"\(\s*(?:€\s*)?$", prefix) is not None
+                and re.match(r"\s*\)", suffix) is not None
+            )
+        ):
+            continue
+        value = Decimal(match.group("number").replace(",", ""))
+        tokens.append(
+            _NumericToken(match.start(), match.end(), value * (1000 if match.group("scale") else 1))
+        )
+    return tokens
+
+
+def numeric_evidence(
+    value: str,
+    evidence: str,
+    message: str | None = None,
+    *,
+    allow_percentage: bool = False,
+    within: str | None = None,
+) -> bool:
+    """Require a complete original-message token inside the verbatim evidence."""
+    original = evidence if message is None else message
+    spans = _evidence_spans(original, evidence)
+    if within is not None:
+        contexts = _evidence_spans(original, within)
+        spans = [
+            (start, end)
+            for start, end in spans
+            if any(left <= start and end <= right for left, right in contexts)
+        ]
+    target = money(value)
+    tokens = _numeric_tokens(original, allow_percentage=allow_percentage)
+    # Repeated evidence must not let a valid occurrence launder a cropped,
+    # negative or foreign-currency occurrence elsewhere in the same message.
+    return bool(spans) and all(
+        any(token.value == target and start <= token.start and token.end <= end for token in tokens)
+        for start, end in spans
     )
 
 
-def vat_evidence(value: str, evidence: str) -> bool:
+PendingClarification = Literal["vat_basis", "vat_rate"]
+
+
+def vat_evidence(
+    value: str, evidence: str, *, pending_clarification: PendingClarification | None = None
+) -> bool:
     patterns = {
-        "no_vat": r"\b(?:no vat|not (?:vat )?registered|vat exempt)\b",
-        "inclusive": r"\b(?:including|inclusive|incl\.?|inc\.?|vat included)\b",
-        "exclusive": r"\b(?:before|excluding|exclusive|excl\.?|ex|plus)\b",
+        "no_vat": r"\b(?:no vat|not vat registered|not registered (?:for )?vat|vat exempt)\b",
+        "inclusive": r"\b(?:(?:including|inclusive(?: of)?|incl\.?|inc\.?)\s+vat|vat included)\b",
+        "exclusive": r"\b(?:before|excluding|exclusive(?: of)?|excl\.?|ex|plus)\s+vat\b",
     }
     if value not in patterns:
         return False
-    if value == "inclusive" and re.search(
-        r"\bnot\s+(?:including|inclusive|incl|inc)\b", evidence, re.I
+    if re.search(
+        r"\b(?:not|never)\s+(?:including|inclusive|incl|inc|excluding|exclusive|excl|before|plus)\b",
+        evidence,
+        re.I,
     ):
         return False
-    return re.search(patterns[value], evidence, re.IGNORECASE) is not None
+    if value == "no_vat" and re.search(
+        r"\bno vat\s+(?:information|rate|details|number|registration|status)\b", evidence, re.I
+    ):
+        return False
+    supported: set[str] = set()
+    for basis, pattern in patterns.items():
+        for match in re.finditer(pattern, evidence, re.I):
+            if re.search(r"\b(?:not|never)\s+(?:\w+\s+){0,2}$", evidence[: match.start()], re.I):
+                return False
+            supported.add(basis)
+    if len(supported) > 1:
+        return False
+    if value in supported:
+        return True
+    if pending_clarification != "vat_basis":
+        return False
+    answers = {
+        "no_vat": r"(?:no vat|not registered|not vat registered|vat exempt)",
+        "inclusive": r"(?:including|inclusive|incl\.?|inc\.?)",
+        "exclusive": r"(?:before|excluding|exclusive|excl\.?|ex|plus)",
+    }
+    return re.fullmatch(answers[value] + r"[.!]?", evidence.strip(), re.I) is not None
 
 
-def apply_proposal(notes: InvoiceNotes, proposal: ProposedNotes, message: str) -> InvoiceNotes:
+def _vat_rate_evidence(
+    value: str,
+    evidence: str,
+    message: str,
+    pending_clarification: PendingClarification | None,
+) -> bool:
+    if not numeric_evidence(value, evidence, message, allow_percentage=True):
+        return False
+    number = r"[0-9]+(?:\.[0-9]+)?"
+    percent = r"(?:%|per\s*cent)"
+    patterns = (
+        rf"\bvat(?:\s+rate)?\s*(?:(?:is|at|of)\s+|:\s*)?(?P<rate>{number})\s*{percent}",
+        rf"\bvat\s+rate\s*(?:(?:is|at|of)\s+|:\s*)?(?P<rate>{number})(?![\w.]|,[0-9])",
+        rf"(?<![\w.,])(?P<rate>{number})\s*{percent}\s*(?:for\s+)?vat\b",
+    )
+    spans = _evidence_spans(message, evidence)
+    rates: set[Decimal] = set()
+    grounded = False
+    for pattern in patterns:
+        for match in re.finditer(pattern, message, re.I):
+            start, end = match.span("rate")
+            if (
+                re.search(r"(?:€|\b(?:EUR|euros?))\s*$", message[:start], re.I)
+                or re.match(rf"\s*(?:{percent}\s*)?(?:€|(?:EUR|euros?|e)\b)", message[end:], re.I)
+                or re.search(r"\b(?:no|not|never)\s+(?:the\s+)?$", message[:start], re.I)
+            ):
+                return False
+            rate = money(match.group("rate"))
+            rates.add(rate)
+            if rate == money(value) and any(
+                left <= start and end <= right for left, right in spans
+            ):
+                grounded = True
+    if rates:
+        return grounded and len(rates) == 1
+    # A short answer is meaningful only when the application asked this exact
+    # missing question in the currently bound version of the notes.
+    return (
+        pending_clarification == "vat_rate"
+        and re.fullmatch(rf"\s*{number}\s*(?:{percent})?\s*[.!]?\s*", message, re.I) is not None
+    )
+
+
+def _mentions(description: str, text: str) -> bool:
+    return re.search(r"(?<!\w)" + re.escape(description) + r"(?!\w)", text, re.I) is not None
+
+
+def _patch_line_items(notes: InvoiceNotes, proposal: ProposedNotes, message: str) -> list[LineItem]:
+    items = list(notes.line_items)
+    selected: set[int] = set()
+    for patch in proposal.line_item_patches:
+        if patch.index in selected or patch.index >= len(notes.line_items):
+            raise ValueError("invalid or repeated line item selection")
+        selected.add(patch.index)
+        item = notes.line_items[patch.index]
+        if (
+            patch.description.casefold() != item.description.casefold()
+            or sum(
+                x.description.casefold() == item.description.casefold() for x in notes.line_items
+            )
+            != 1
+            or patch.evidence not in message
+            or not _mentions(item.description, patch.evidence)
+            or any(
+                _mentions(other.description, patch.evidence)
+                for index, other in enumerate(notes.line_items)
+                if index != patch.index
+            )
+        ):
+            raise ValueError("ambiguous or ungrounded line item selection")
+        values = item.model_dump()
+        seen: set[str] = set()
+        for change in patch.changes:
+            if change.field in seen or change.evidence not in patch.evidence:
+                raise ValueError("ungrounded or repeated line item change")
+            seen.add(change.field)
+            if change.field == "description":
+                if not _mentions(change.value, change.evidence):
+                    raise ValueError("ungrounded line item description")
+            elif not numeric_evidence(
+                change.value, change.evidence, message, within=patch.evidence
+            ):
+                raise ValueError("ungrounded line item amount")
+            values[change.field] = change.value
+        updated = LineItem.model_validate(values)
+        if money(updated.quantity) * money(updated.unit_price) > Decimal("1000000"):
+            raise ValueError("line item amount outside supported range")
+        items[patch.index] = updated
+    return items
+
+
+def apply_proposal(
+    notes: InvoiceNotes,
+    proposal: ProposedNotes,
+    message: str,
+    *,
+    pending_clarification: PendingClarification | None = None,
+    expected_version: int | None = None,
+    current_version: int | None = None,
+) -> InvoiceNotes:
+    if (expected_version is not None or current_version is not None) and (
+        expected_version is None or current_version is None or expected_version != current_version
+    ):
+        raise ValueError("stale preparation notes")
+    if proposal.line_item_patches and (
+        expected_version is None or current_version is None or proposal.line_items is not None
+    ):
+        raise ValueError("line item patches require a single version-bound operation")
     values = notes.model_dump()
     seen: set[str] = set()
     for change in proposal.changes:
         if change.field in seen or change.evidence not in message:
             raise ValueError("ungrounded or repeated change")
         seen.add(change.field)
-        if change.field in {"amount", "labour", "materials", "vat_rate"}:
-            if not numeric_evidence(change.value, change.evidence):
+        if change.field in {"amount", "labour", "materials"}:
+            if not numeric_evidence(change.value, change.evidence, message):
                 raise ValueError("ungrounded amount")
+        elif change.field == "vat_rate":
+            if not _vat_rate_evidence(
+                change.value, change.evidence, message, pending_clarification
+            ):
+                raise ValueError("ungrounded VAT rate")
         elif change.field == "vat_basis":
-            if not vat_evidence(change.value, change.evidence):
+            # Validate the original clause, not a substring such as "including"
+            # taken from "not including VAT".
+            if not vat_evidence(
+                change.value, message, pending_clarification=pending_clarification
+            ) or not vat_evidence(
+                change.value, change.evidence, pending_clarification=pending_clarification
+            ):
                 raise ValueError("ungrounded VAT basis")
         elif change.value.casefold() not in change.evidence.casefold():
             raise ValueError("ungrounded text")
@@ -173,12 +417,16 @@ def apply_proposal(notes: InvoiceNotes, proposal: ProposedNotes, message: str) -
         for item in proposal.line_items:
             if (
                 item.description.casefold() not in evidence.casefold()
-                or not numeric_evidence(item.quantity, evidence)
-                or not numeric_evidence(item.unit_price, evidence)
+                or not numeric_evidence(item.quantity, evidence, message)
+                or not numeric_evidence(item.unit_price, evidence, message)
                 or money(item.quantity) * money(item.unit_price) > Decimal("1000000")
             ):
                 raise ValueError("invalid line item")
         values["line_items"] = [item.model_dump() for item in proposal.line_items]
+    elif proposal.line_item_patches:
+        values["line_items"] = [
+            item.model_dump() for item in _patch_line_items(notes, proposal, message)
+        ]
     return InvoiceNotes.model_validate(values)
 
 

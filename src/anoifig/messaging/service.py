@@ -231,7 +231,12 @@ def accept_inbound(session: Session, payload: InboundPayload) -> UUID | None:
 
 
 def reply_to_inbound(
-    session: Session, message: Message, body: str, *, error_code: str | None = None
+    session: Session,
+    message: Message,
+    body: str,
+    *,
+    error_code: str | None = None,
+    conversation_version: int | None = None,
 ) -> None:
     """Persist a single reply/outbox together with source completion in one transaction.
 
@@ -256,6 +261,7 @@ def reply_to_inbound(
             account_sid=message.account_sid,
             status="pending",
             reply_to_id=message.id,
+            conversation_version=conversation_version,
         )
         session.add(response)
         session.flush()

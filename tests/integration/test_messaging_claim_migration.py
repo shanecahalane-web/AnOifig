@@ -61,7 +61,8 @@ def snapshot(database, *, include_claims=False):
                 {
                     key: value
                     for key, value in row.items()
-                    if include_claims or key not in CLAIM_COLUMNS
+                    if key != "conversation_version"
+                    and (include_claims or key not in CLAIM_COLUMNS)
                 }
                 for row in connection.execute(text(f"SELECT * FROM {table} ORDER BY id")).mappings()
             ]
@@ -109,40 +110,34 @@ def insert_revision_0002_records(database, seed):
             )
         )
         session.flush()
-        session.add_all(
-            [
-                Message(
-                    id=processed_id,
-                    **common,
-                    direction="inbound",
-                    body="Earlier accepted text",
-                    twilio_sid="SM" + uuid4().hex,
-                    status="processed",
-                    processed_at=now,
-                    processing_attempts=1,
-                ),
-                Message(
-                    id=pending_id,
-                    **common,
-                    direction="inbound",
-                    body="Accepted before upgrade",
-                    twilio_sid="SM" + uuid4().hex,
-                    status="received",
-                ),
-            ]
-        )
-        session.flush()
-        session.add(
-            Message(
+        # Core inserts explicitly list the historical columns. ORM persistence
+        # would also emit later nullable fields absent from revision 0002.
+        for values in (
+            dict(
+                id=processed_id,
+                direction="inbound",
+                body="Earlier accepted text",
+                twilio_sid="SM" + uuid4().hex,
+                status="processed",
+                processed_at=now,
+                processing_attempts=1,
+            ),
+            dict(
+                id=pending_id,
+                direction="inbound",
+                body="Accepted before upgrade",
+                twilio_sid="SM" + uuid4().hex,
+                status="received",
+            ),
+            dict(
                 id=reply_id,
-                **common,
                 direction="outbound",
                 body="Committed reply",
                 reply_to_id=processed_id,
                 status="retry",
-            )
-        )
-        session.flush()
+            ),
+        ):
+            session.execute(Message.__table__.insert().values(**common, **values))
         session.add(
             Outbox(
                 id=outbox_id,

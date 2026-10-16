@@ -31,6 +31,9 @@ class TaraState(Base):
         ),
         CheckConstraint("version >= 0", name="valid_version"),
         CheckConstraint("jsonb_typeof(notes) = 'object'", name="object_notes"),
+        CheckConstraint(
+            "pending_clarification IN ('vat_basis', 'vat_rate')", name="valid_clarification"
+        ),
     )
     conversation_id: Mapped[UUID] = mapped_column(primary_key=True)
     tenant_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
@@ -39,6 +42,8 @@ class TaraState(Base):
         JSONB, nullable=False, server_default=text("'{}'::jsonb")
     )
     version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    memory_after_id: Mapped[UUID | None] = mapped_column()
+    pending_clarification: Mapped[str | None] = mapped_column(String(16))
     memory_since: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -58,6 +63,7 @@ class TaraRun(Base):
         CheckConstraint("status IN ('processing', 'complete')", name="valid_status"),
         CheckConstraint("reserved_tokens >= 0 AND reserved_cost >= 0", name="valid_reservation"),
         CheckConstraint("input_tokens >= 0 AND output_tokens >= 0", name="valid_usage"),
+        CheckConstraint("expected_version >= 0", name="valid_expected_version"),
     )
     message_id: Mapped[UUID] = mapped_column(primary_key=True)
     tenant_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
@@ -79,6 +85,7 @@ class TaraRun(Base):
     error_code: Mapped[str | None] = mapped_column(String(64))
     intent: Mapped[str | None] = mapped_column(String(32))
     action: Mapped[str | None] = mapped_column(String(32))
+    expected_version: Mapped[int | None] = mapped_column(Integer)
 
 
 class TaraUsage(Base):

@@ -48,11 +48,12 @@ Every setting uses the `ANOIFIG_` prefix. Configuration is validated at startup.
 | `TARA_MODE` | `acknowledgement`; `mock` and `openai` also supported |
 | `OPENAI_API_KEY` | SecretStr; no default; inject securely into the worker only |
 | `TARA_MODEL` | `gpt-4.1-mini`; select a model supporting strict tools and structured output |
-| `TARA_TIMEOUT_SECONDS` | 15 seconds per SDK attempt, range 1–30 |
+| `TARA_TIMEOUT_SECONDS` | 15 seconds per HTTP operation, range 1–30 |
+| `TARA_DEADLINE_SECONDS` | 60 seconds overall, range 1–90; cancels HTTP and SDK retry/Retry-After waits before the 120-second run fence |
 | `TARA_MAX_RETRIES` | 1 SDK retry, range 0–2 |
 | `TARA_MAX_INPUT_TOKENS` | 16000; conservative UTF-8/schema/framing bound checked before calling |
 | `TARA_MAX_OUTPUT_TOKENS` | 1200; passed as `max_completion_tokens` |
-| `TARA_HISTORY_MESSAGES` | 8, range 0–30; at most 600 characters each |
+| `TARA_HISTORY_MESSAGES` | 8 prior inbound turns, range 0–30; at most 600 characters each, minimised contact information |
 | `TARA_MEMORY_DAYS` | 30, range 1–90; history cutoff plus lazy state expiry |
 | `TARA_INPUT_PRICE_USD` | 0 offline; require reviewed positive USD per million input tokens live |
 | `TARA_OUTPUT_PRICE_USD` | 0 offline; require reviewed positive USD per million output tokens live |
@@ -86,12 +87,28 @@ suite. Each run records the configured model and prompt version. No remote promp
 editor, user-supplied system instruction or provider-hosted history is authoritative.
 
 Invoice notes merge only supplied fields; absent fields survive interruptions.
-Corrections do not reset the task. Application templates request customer, work,
+Corrections do not reset the task. Selective item patches bind to the application-owned
+notes version, exact item index/unique description and current-message selector.
+Only changed values need new evidence. Stale completions fail without overwriting
+newer notes. Full original financial spans validate signs, currency, precision and
+numeric context; unrelated prices/dates cannot supply VAT evidence. Bare VAT
+answers require the matching application-owned pending clarification.
+
+Social replies select a reviewed speech act; model text is never rendered. Business
+claims and capabilities come from application templates. No backend invoice,
+email, payment or financial-delivery action exists in this milestone. Application templates request customer, work,
 charges, VAT basis and then the user-supplied VAT rate when needed. No rate is
 inferred from the trade. Exact `start a new invoice` / `start over` commands reset
 the active task; they do not create an invoice. Exact `forget my notes` / `clear
 my notes` commands also reset context. They leave raw messaging/audit records
-subject to the retention workflow described in the ADR.
+subject to the [retention and deletion design](../retention-and-deletion.md).
+Reset uses the reset message's durable `(received_at, id)` boundary, so messages
+accepted afterward remain available even if already queued at processing time.
+History carries processed inbound turns plus structured notes and pending question;
+raw outbound prose is not replayed. Stored customer-contact turns are omitted,
+and common email/phone/IBAN values are redacted from other stored context. The
+current user input still goes to the provider to extract explicitly supplied facts;
+this minimisation is not an arbitrary-PII detector or physical erasure.
 
 ## Operations and remaining release gates
 
@@ -103,10 +120,17 @@ expired processing, budget denials, backlog age and existing messaging uncertain
 Thresholds, on-call ownership and monitoring deployment still need review.
 
 A two-minute interrupted turn becomes one fallback when rediscovered; its
-reservation stays charged. Never reset its run or delete reply/outbox records to
+reservation stays charged. SQL/preparation/completion errors use the existing
+five-attempt processing ledger. Terminal recovery commits one fallback, fences
+late results and advances the conversation without another model call. Recovery
+also recognises an already committed reply after a lost commit acknowledgement.
+Never reset its run or delete reply/outbox records to
 force a replay. Reauthorise a parked route through the existing operator process;
-reconcile its head turn before resuming later messages. Twilio dispatch uncertainty
-must still follow [the messaging runbook](messaging.md).
+reconcile its head turn before resuming later messages. Replies dispatch in source inbound `(received_at, id)` order. An unresolved earlier
+pending/retry/dispatching/uncertain send blocks later replies. Uncertain sends are
+never blindly replayed; signed callbacks or audited operator reconciliation must
+resolve them. This orders application send attempts, not the mobile network's
+ultimate delivery. Twilio dispatch uncertainty must still follow [the messaging runbook](messaging.md).
 
 Before live use: approve the provider account/model and current prices; measure
 extraction/personality accuracy on realistic Irish language and shorthand with
