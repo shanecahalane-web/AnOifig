@@ -1,5 +1,8 @@
 """Full-message financial assertions, clause bindings and safe clarification."""
 
+import subprocess
+import sys
+
 import pytest
 
 from anoifig.tara.schemas import InvoiceNotes, ProposedNotes, apply_proposal
@@ -320,3 +323,25 @@ def test_vat_basis_cannot_crop_away_uncertainty_or_shared_negation(message):
 def test_affirmative_explicit_vat_still_passes(message, field, value):
     result = apply_proposal(InvoiceNotes(), scalar(field, value, message), message)
     assert getattr(result, field) == value
+
+
+def test_repeated_currency_tokens_cannot_pin_the_worker_in_regex_backtracking():
+    # A separate interpreter bounds a regression without leaving a stuck test
+    # thread behind. Previous non-atomic currency alternatives exceed this limit
+    # with only 30 repetitions; the message here remains below ingress limits.
+    code = """
+from anoifig.tara.schemas import InvoiceNotes, ProposedNotes, apply_proposal
+message = 'EUR ' * 800 + 'reference abc500; Charge 500 SEK'
+notes = InvoiceNotes(amount='450')
+proposal = ProposedNotes.model_validate({
+    'intent':'correction', 'changes':[{'field':'amount','value':'500','evidence':message}],
+    'line_items':None, 'line_items_evidence':None,
+})
+try:
+    apply_proposal(notes, proposal, message)
+except ValueError:
+    assert notes.amount == '450'
+else:
+    raise AssertionError('Unsupported financial expression accepted')
+"""
+    subprocess.run([sys.executable, "-c", code], check=True, capture_output=True, timeout=3)

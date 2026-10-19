@@ -10,6 +10,9 @@ decimal values use Decimal; unsupported syntax requests clarification and leaves
 the saved notes unchanged. Currency conversion, inferred prices, arithmetic and
 automatic VAT selection remain unavailable. This is a conservative supported
 language grammar, not a claim to understand arbitrary financial prose or tax law.
+Currency lexing commits overlapping code matches atomically so repeated currency
+words cannot cause exponential regex backtracking while holding a conversation
+transaction. A subprocess-bounded regression covers the ingress-sized case.
 
 Bind item patches to the application-captured version and a complete original
 item clause. The clause must identify the selected item and support the changed

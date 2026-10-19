@@ -35,7 +35,7 @@ rewritten to manufacture failures.
 
 | Evidence | Reviewed commit | Corrected implementation |
 | --- | --- | --- |
-| New expression/name/privacy unit cases | 147 failed, 55 passed, including seven expectations for the new labelled name display | All 202 pass |
+| New expression/name/privacy unit cases | 148 failed, 55 passed, including seven expectations for the new labelled name display | All 203 pass |
 | New signed-ingress PostgreSQL cases | 20 failed, 9 passed; one new clarification-enum case excluded from baseline because the enum did not exist | All 30 pass |
 | Actual DNS resolution / executor shutdown, configured 2-second deadline | Default SDK/HTTPX resolver stub sleeps 3.5 seconds; adapter returns after 3.892 seconds, with `dns_started` and `dns_finished` | Isolated adapter returns after 2.008 seconds; `dns_started` recorded, child stopped before `dns_finished` |
 | Unsupported currency, word-negative and unresolved amount alternatives | Unsafe updates accepted | Existing amount preserved and one controlled clarification persisted |
@@ -54,14 +54,14 @@ and oversized IPC, fixed command arguments, and proxy/CA environment preservatio
 
 ## Complete validation
 
-The full suite contains **1,079 tests**: the existing 834 plus 245 new cases.
+The full suite contains **1,080 tests**: the existing 834 plus 246 new cases.
 No existing assertion or scenario was removed or weakened. The existing 57 SDK
 tests now exercise the same async serializer/parser component inside the isolated
 adapter; 13 additional tests verify the public synchronous process boundary.
 
 | Check | Final local result |
 | --- | --- |
-| Complete pytest, real PostgreSQL, no skips | **1,079 passed in 147.01 seconds** |
+| Complete pytest, real PostgreSQL, no skips | **1,080 passed in 146.71 seconds** |
 | Ruff lint / formatting | Passed; 96 Python files formatted |
 | Strict Mypy | Passed; 39 source files |
 | Bandit | Passed; no findings |
@@ -75,6 +75,11 @@ The initial full run exposed three legitimate-name display expectations and a
 terminal-punctuation selector regression; both were corrected without weakening
 tests. A Docker network change briefly interrupted local PostgreSQL connections;
 affected validation was repeated after networking stabilised.
+Final adversarial validation also exposed exponential backtracking in overlapping
+currency-code alternatives. Atomic lexical matches correct this; an isolated
+regression with 800 repetitions completes within its 3-second test bound, while
+the preceding correction implementation times out. This safeguard is included
+in the final full suite and image.
 
 Existing migration tests retain 0005→0006→0005→0006 value comparisons, legacy NULL
 compatibility, RLS, owners/ACLs, constraints and metadata checks. Existing recovery,

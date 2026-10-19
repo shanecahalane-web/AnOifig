@@ -275,9 +275,13 @@ def _currency_context_supported(message: str) -> bool:
     # Look on both sides of every digit expression, not just the selected number.
     # This rejects mixed currencies and currency/sign orders such as negative EUR.
     number = r"[+\-−–]?\s*[0-9][0-9,.]*(?:k|e)?"
+    # Known codes also match the unknown-code alternative. Commit each lexical
+    # match and the run so repeated currency words cannot cause exponential
+    # backtracking when no valid number follows.
+    chain = rf"(?P<chain>(?:(?>{_CURRENCY})\s*)++)"
     for pattern in (
-        rf"(?P<chain>(?:{_CURRENCY}\s*)+){number}",
-        rf"{number}\s*(?P<chain>(?:{_CURRENCY}\s*)+)",
+        rf"{chain}{number}",
+        rf"{number}\s*{chain}",
     ):
         for match in re.finditer(pattern, message):
             for part in re.finditer(_CURRENCY, match.group("chain")):
