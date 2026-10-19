@@ -213,10 +213,11 @@ _CODES = [
     "ZMW",
     "ZWG",
 ]
-_CURRENCY_WORD = (
-    r"(?:" + "|".join(_CODES) + r"|euros?|dollars?|pounds?|sterling|yen|yuan|renminbi|"
-    r"rupees?|roubles?|rubles?|kron[ae]|kron[eo]r|francs?|dirhams?|pesos?|bitcoin)"
+_FOREIGN_CURRENCY_NAMES = (
+    r"dollars?|pounds?|sterling|yen|yuan|renminbi|rupees?|roubles?|rubles?|"
+    r"kron[ae]|kron[eo]r|crowns?|francs?|dirhams?|pesos?|bitcoin"
 )
+_CURRENCY_WORD = r"(?:" + "|".join(_CODES) + r"|euros?|" + _FOREIGN_CURRENCY_NAMES + r")"
 _CURRENCY = rf"(?:[^\w\s.,;:()!?+\-−–]|\b(?i:{_CURRENCY_WORD})\b|\b[A-Z]{{3}}\b)"
 _NEGATION = re.compile(
     r"\b(?:not|never|no|minus|negative|deduct|subtract|credit|refund|"
@@ -272,6 +273,11 @@ def _currency_is_supported(currency: str) -> bool:
 
 
 def _currency_context_supported(message: str) -> bool:
+    # Currency names remain meaningful with country qualifiers or other words
+    # between them and the digits ("500 New Zealand dollars"). Do not treat a
+    # cropped number as EUR merely because the currency is not adjacent.
+    if re.search(rf"\b(?:{_FOREIGN_CURRENCY_NAMES})\b", message, re.I):
+        return False
     # Look on both sides of every digit expression, not just the selected number.
     # This rejects mixed currencies and currency/sign orders such as negative EUR.
     number = r"[+\-−–]?\s*[0-9][0-9,.]*(?:k|e)?"

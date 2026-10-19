@@ -35,7 +35,7 @@ rewritten to manufacture failures.
 
 | Evidence | Reviewed commit | Corrected implementation |
 | --- | --- | --- |
-| New expression/name/privacy unit cases | 157 failed, 58 passed, including seven expectations for the new labelled name display | All 215 pass |
+| New expression/name/privacy unit cases | 169 failed, 58 passed, including seven expectations for the new labelled name display | All 227 pass |
 | New signed-ingress PostgreSQL cases | 20 failed, 9 passed; one new clarification-enum case excluded from baseline because the enum did not exist | All 30 pass |
 | Actual DNS resolution / executor shutdown, configured 2-second deadline | Default SDK/HTTPX resolver stub sleeps 3.5 seconds; adapter returns after 3.892 seconds, with `dns_started` and `dns_finished` | Isolated adapter returns after 2.008 seconds; `dns_started` recorded, child stopped before `dns_finished` |
 | Unsupported currency, word-negative and unresolved amount alternatives | Unsafe updates accepted | Existing amount preserved and one controlled clarification persisted |
@@ -54,14 +54,14 @@ and oversized IPC, fixed command arguments, and proxy/CA environment preservatio
 
 ## Complete validation
 
-The full suite contains **1,092 tests**: the existing 834 plus 258 new cases.
+The full suite contains **1,104 tests**: the existing 834 plus 270 new cases.
 No existing assertion or scenario was removed or weakened. The existing 57 SDK
 tests now exercise the same async serializer/parser component inside the isolated
 adapter; 13 additional tests verify the public synchronous process boundary.
 
 | Check | Final local result |
 | --- | --- |
-| Complete pytest, real PostgreSQL, no skips | **1,092 tests**; final complete run outcomes and timings recorded in PR #4 |
+| Complete pytest, real PostgreSQL, no skips | **1,104 tests**; final complete run outcomes and timings recorded in PR #4 |
 | Ruff lint / formatting | Passed; 96 Python files formatted |
 | Strict Mypy | Passed; 39 source files |
 | Bandit | Passed; no findings |
@@ -84,6 +84,10 @@ Scalar amounts, labour and materials also reject either operand of ASCII `x`/`X`
 quantity shorthand, including when only the second operand carries a currency.
 This prevents `3x25` becoming a €3 charge without removing the existing low-level
 quantity-token behaviour. Twelve full-message cases cover all three scalar fields.
+Foreign currency names are checked across the original message, so intervening
+country qualifiers such as `500 New Zealand dollars` cannot conceal the currency.
+Ambiguous currency words that could also be names or units can require clearer,
+separate input; the application preserves the saved notes instead of guessing.
 GitHub run 13 exposed a pre-existing fairness-test clock assumption: four fast
 parallel batches could finish before one-second contention cooldowns elapsed,
 yielding 35 rather than 101 sends at its intermediate assertion. The test now
