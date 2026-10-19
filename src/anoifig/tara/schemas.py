@@ -15,6 +15,7 @@ from anoifig.tara.financial import (
     financial_negative_clause,
     inherited_negative,
     negative_clause,
+    nonassertive_expression,
     numeric_evidence,
 )
 from anoifig.tara.financial import (
@@ -215,6 +216,7 @@ def vat_evidence(
                 negative_clause(assertion)
                 or inherited_negative(evidence, clause)
                 or re.search(r"\bor\b", clause.text, re.I)
+                or nonassertive_expression(evidence, clause, match.start(), match.end())
             ):
                 return False
             supported.add(basis)
@@ -265,6 +267,7 @@ def _vat_rate_evidence(
                 clause is None
                 or negative_clause(clause.text)
                 or inherited_negative(message, clause)
+                or nonassertive_expression(message, clause, match.start(), match.end())
                 or re.search(r"(?:€|\b(?:EUR|euros?))\s*$", message[:start], re.I)
                 or re.match(rf"\s*(?:{percent}\s*)?(?:€|(?:EUR|euros?|e)\b)", message[end:], re.I)
                 or re.search(r"\b(?:no|not|never)\s+(?:the\s+)?$", message[:start], re.I)

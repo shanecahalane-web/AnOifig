@@ -535,9 +535,12 @@ class TaraService:
     ) -> None:
         now = datetime.now(UTC)
         run.status, run.completed_at, run.error_code = "complete", now, error
-        if error:
-            state.pending_clarification = None
-        state.updated_at = now
+        # A stale run owns its fallback reply, not the newer state's pending
+        # question or activity timestamp. Keep every newer state field intact.
+        if error != "stale_state":
+            if error:
+                state.pending_clarification = None
+            state.updated_at = now
         message.conversation_version = state.version
         reply_to_inbound(
             session, message, body, error_code=error, conversation_version=state.version

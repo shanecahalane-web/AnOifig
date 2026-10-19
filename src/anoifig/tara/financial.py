@@ -219,9 +219,19 @@ _FOREIGN_CURRENCY_NAMES = (
 )
 _CURRENCY_WORD = r"(?:" + "|".join(_CODES) + r"|euros?|" + _FOREIGN_CURRENCY_NAMES + r")"
 _CURRENCY = rf"(?:[^\w\s.,;:()!?+\-−–]|\b(?i:{_CURRENCY_WORD})\b|\b[A-Z]{{3}}\b)"
+_FOREIGN_CODE = r"(?:" + "|".join(code for code in _CODES if code != "EUR") + r")"
+_QUALIFIED_FOREIGN_CODE = re.compile(
+    rf"\(\s*{_FOREIGN_CODE}\s*\)|"
+    rf"\b(?:in|currency(?:\s+is)?|denominated(?:\s+in)?)\s+{_FOREIGN_CODE}\b|"
+    rf"\b{_FOREIGN_CODE}\s+(?:amount|price|cost|charge|total|labou?r|materials?)"
+    r"\s*(?:(?:is|of|to)\s+|[:=]\s*)?€?\s*[0-9]",
+    re.I,
+)
 _NEGATION = re.compile(
     r"\b(?:not|never|no|minus|negative|deduct|subtract|credit|refund|"
-    r"unchanged|stay|stays|leave|keep)\b|\bdon['’]?t\b",
+    r"unchanged|stay|stays|leave|keep|cannot)\b|"
+    r"\b(?:don|doesn|didn|isn|aren|wasn|weren|can|couldn|wouldn|shouldn|"
+    r"won|shan|haven|hasn|hadn|mustn|needn)['’]?t\b",
     re.I,
 )
 _UNCERTAIN = re.compile(
@@ -239,6 +249,58 @@ _NEXT_ITEM = re.compile(
 def negative_clause(text: str) -> bool:
     """Do not infer a new positive number from negative/preservation instructions."""
     return _NEGATION.search(text) is not None
+
+
+def nonassertive_expression(message: str, clause: Clause, start: int, end: int) -> bool:
+    """Retain questions and rejected assertions across soft clause boundaries."""
+    boundaries = list(re.finditer(r"[;\n!?]|\.(?=\s|$)", message))
+    sentence_start = max((part.end() for part in boundaries if part.end() <= start), default=0)
+    sentence_end = next((part.start() for part in boundaries if part.start() >= end), len(message))
+    before, after = message[sentence_start:start], message[end:sentence_end]
+    # Numeric spans omit spaced currency/percentage/unit labels; VAT callers
+    # supply the complete assertion. Neither representation may hide its suffix.
+    after = re.sub(
+        r"^\s*(?:(?:€|EUR\b|euros?\b|e\b|%|per\s*cent\b|percent\b|"
+        r"each\b|apiece\b|per\s+(?:item|unit)\b)\s*)*(?:VAT\b\s*)?",
+        "",
+        after,
+        flags=re.I,
+    )
+    before = re.sub(r"(?:\s*(?:,|\b(?:and|but)\b))+\s*$", "", before, flags=re.I)
+    continued = re.match(r"^\s*(?:,|\b(?:and|but)\b)", after, re.I) is not None
+    after = re.sub(r"^\s*(?:(?:,|\b(?:and|but)\b)\s*)*", "", after, flags=re.I)
+    assessment = r"(?:incorrect|wrong|false|invalid|mistaken|inapplicable)"
+    question = (
+        r"\s*(?:is|are|do|does|should|could|would|can|will|"
+        r"what|which|how|why|when|where|who|whose)\b"
+    )
+    predicate = re.sub(
+        r"^\s*(?:(?:this|that|it)\s+)?(?:(?:is|are|was|were)\s+)?", "", after, flags=re.I
+    )
+    first_word = re.match(r"[\w'’]+", predicate)
+    registration_confirmation = (
+        re.fullmatch(r"no\s+VAT", message[start:end], re.I) is not None
+        and re.fullmatch(r"not\s+registered", after, re.I) is not None
+    )
+    return bool(
+        message[sentence_end : sentence_end + 1] == "?"
+        or re.match(question, clause.text, re.I)
+        or re.match(question, message[sentence_start:start], re.I)
+        or continued
+        and re.match(question, after, re.I)
+        or re.search(rf"\b{assessment}\s*$", before, re.I)
+        or re.match(
+            rf"\s*(?:(?:this|that|it)\s+)?"
+            rf"(?:(?:is|are|was|were|seems?|looks?|would\s+be)\s+)?"
+            rf"(?:(?:definitely|clearly|actually)\s+)?{assessment}\b",
+            after,
+            re.I,
+        )
+        or first_word is not None
+        and negative_clause(first_word.group())
+        and financial_negative_clause(predicate)
+        and not registration_confirmation
+    )
 
 
 def financial_negative_clause(text: str) -> bool:
@@ -277,6 +339,18 @@ def _currency_context_supported(message: str) -> bool:
     # between them and the digits ("500 New Zealand dollars"). Do not treat a
     # cropped number as EUR merely because the currency is not adjacent.
     if re.search(rf"\b(?:{_FOREIGN_CURRENCY_NAMES})\b", message, re.I):
+        return False
+    # An annotation can be separated from the digits by a preposition, field
+    # label or parentheses. Symbols and explicit uppercase ISO codes remain
+    # currency evidence throughout the original input. Case-insensitive codes
+    # also match reviewed currency syntax, without making ordinary words such as
+    # "all labour" or "pen tray" currencies merely because they share a code.
+    if (
+        any(unicodedata.category(char) == "Sc" and char != "€" for char in message)
+        or "₿" in message
+        or re.search(rf"\b{_FOREIGN_CODE}\b", message)
+        or _QUALIFIED_FOREIGN_CODE.search(message)
+    ):
         return False
     # Look on both sides of every digit expression, not just the selected number.
     # This rejects mixed currencies and currency/sign orders such as negative EUR.
@@ -518,6 +592,7 @@ def numeric_evidence(
                 clause.start <= token.start
                 and token.end <= clause.end
                 and _complete_clause_safe(clause.text)
+                and not nonassertive_expression(original, clause, token.start, token.end)
                 and (allow_percentage or not financial_negative_clause(clause.text))
                 and (allow_percentage or not inherited_negative(original, clause, financial=True))
                 and role_matches(role, token, original, clause, item_description)

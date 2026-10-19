@@ -13,6 +13,9 @@ language grammar, not a claim to understand arbitrary financial prose or tax law
 Currency lexing commits overlapping code matches atomically so repeated currency
 words cannot cause exponential regex backtracking while holding a conversation
 transaction. A subprocess-bounded regression covers the ingress-sized case.
+Currency annotations also apply when separated from the amount by parentheses,
+prepositions or field labels. Explicit foreign symbols/codes cannot be dropped
+by selecting only a numeric excerpt; qualified code syntax is case-insensitive.
 
 Bind item patches to the application-captured version and a complete original
 item clause. The clause must identify the selected item and support the changed
@@ -20,6 +23,11 @@ quantity or unit-price role. A model-selected excerpt cannot borrow a value from
 another clause, omit negation or turn a preservation instruction into an update.
 VAT validation examines the polarity and alternatives of the full assertion;
 short answers still require the application's matching pending clarification.
+Questions and rejected assertions do not establish financial or VAT facts.
+Shared assertion checks inspect the surrounding original sentence, including
+soft comma/conjunction continuations, when proposed evidence contains only a
+number or basis phrase. Hard sentence/semicolon/newline boundaries preserve
+independent affirmative statements alongside unrelated questions.
 
 Customer names have bounded, single-line structure supporting Unicode personal
 and business names. Application status statements never interpolate customer names
@@ -34,6 +42,8 @@ Check the source's existing run before expiring state. A duplicate of a live run
 does not mutate notes, timestamps, version or reservations. Expiry advances its
 durable source boundary once and refreshes the state's activity timestamp. The
 completion token/version checks still reject genuinely stale or expired results.
+Rejecting a stale completion leaves the newer notes, pending clarification and
+activity timestamp intact while finishing only the old run and its fallback.
 
 Validated structured notes carry the task facts. Do not replay raw successful
 note-edit turns, including historical `notes_merged` records and contact edits
@@ -44,6 +54,8 @@ Bound and minimise remaining conversational context; omit stored contact details
 from structured provider context and redact supported email, IBAN and telephone
 formats. Current input is still sent for extraction. Pattern matching cannot
 detect arbitrary personal information or perform physical deletion.
+Telephone separators include horizontal non-breaking and narrow non-breaking
+spaces; numeric boundary and currency controls still protect ordinary amounts.
 
 ## Provider lifecycle
 

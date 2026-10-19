@@ -62,7 +62,9 @@ _IRISH_LENGTHS = {
         "94",
     ),
 }
-_SEPARATOR = r"[ ()\t-]*"
+# Pasted/formatted numbers commonly use non-breaking spaces to keep digit
+# groups together. Keep separators horizontal so a match cannot span lines.
+_SEPARATOR = r"[ ()\t\u00a0\u202f-]*"
 
 
 def _spaced_digits(digits: str) -> str:
@@ -77,9 +79,9 @@ _IRISH_NUMBER = re.compile(
         for length, prefixes in _IRISH_LENGTHS.items()
         for prefix in prefixes
     )
-    + r")(?!\w|[.,]\d|[ ()\t-]*\d)"
+    + rf")(?!\w|[.,]\d|{_SEPARATOR}\d)"
 )
-_INTERNATIONAL_NUMBER = re.compile(r"(?<![\w+])\+[1-9](?:[ ()\t-]*\d){6,14}(?!\w|[.,]\d)")
+_INTERNATIONAL_NUMBER = re.compile(rf"(?<![\w+])\+[1-9](?:{_SEPARATOR}\d){{6,14}}(?!\w|[.,]\d)")
 _CURRENCY_BEFORE = re.compile(r"(?:[€£$]|\b(?:EUR|USD|GBP))\s*$", re.IGNORECASE)
 _CURRENCY_AFTER = re.compile(r"^\s*(?:[€£$]|(?:EUR|USD|GBP)\b)", re.IGNORECASE)
 

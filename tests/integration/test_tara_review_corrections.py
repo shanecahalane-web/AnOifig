@@ -297,7 +297,16 @@ def test_customer_name_validation_preserves_legitimate_names(
 
 @pytest.mark.parametrize(
     "phone",
-    ["01 555 0123", "021 555 0123", "061 555 123", "00353 87 555 0123"],
+    [
+        "01 555 0123",
+        "021 555 0123",
+        "061 555 123",
+        "00353 87 555 0123",
+        "01\u00a0555\u00a00123",
+        "021\u202f555\u202f0123",
+        "00353\u00a087\u00a0555\u00a00123",
+        "+353\u202f87\u202f555\u202f0123",
+    ],
 )
 def test_irish_phone_redaction_covers_complete_payload_without_erasing_money(
     phone, messaging_client, database, seed, bearer

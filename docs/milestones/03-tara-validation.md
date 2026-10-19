@@ -54,15 +54,16 @@ and oversized IPC, fixed command arguments, and proxy/CA environment preservatio
 
 ## Complete validation
 
-The full suite contains **1,104 tests**: the existing 834 plus 270 new cases.
+The full suite now contains **1,305 tests**: the existing 834, the first 270
+correction cases, and 201 additional cases from the continuation review below.
 No existing assertion or scenario was removed or weakened. The existing 57 SDK
 tests now exercise the same async serializer/parser component inside the isolated
 adapter; 13 additional tests verify the public synchronous process boundary.
 
 | Check | Final local result |
 | --- | --- |
-| Complete pytest, real PostgreSQL, no skips | **1,104 tests**; final complete run outcomes and timings recorded in PR #4 |
-| Ruff lint / formatting | Passed; 96 Python files formatted |
+| Complete pytest, real PostgreSQL, no skips | **1,305 passed**, no skips, 184.08 seconds |
+| Ruff lint / formatting | Passed; 99 Python files formatted |
 | Strict Mypy | Passed; 39 source files |
 | Bandit | Passed; no findings |
 | Frozen dependency sync | Passed; 70 installed packages checked |
@@ -115,6 +116,76 @@ uv run --frozen bandit -r src -q
 uv audit --locked
 ```
 
+## Continuation review, 19 October 2026
+
+The continuation began at `fb8db2b77df68d72c34b5003931edcbac461e22c`.
+Its existing GitHub Actions run 16 was independently checked: all 1,104 tests,
+lint, formatting, Mypy, Bandit and locked audit passed. Further adversarial checks
+found adjacent gaps in the supported grammar and stale-state metadata boundary;
+the earlier passing result alone did not establish that every variation was safe.
+An untouched archive of that head ran the final new test files with the archived
+source path verified: 117 unit failures / 43 passes and 37 PostgreSQL failures.
+Implementation files in the archive were unchanged.
+The before run used the same locked dependencies and separate disposable
+`baseline_review_test` database. The unit run selected the two new unit modules;
+the PostgreSQL run selected the new follow-up integration module. `PYTHONPATH`
+selected the archive's `src` directory and an assertion verified the imported
+schema module came from that directory before invoking pytest.
+
+- Foreign currency annotations separated from their amount by a preposition,
+  parentheses or field label could be ignored. Validation now checks original-input
+  foreign symbols and explicit ISO codes, including case-insensitive qualified
+  syntax. Ordinary lower-case words sharing ISO codes retain positive controls.
+- Financial/VAT questions, rejected assertions and contracted negatives could
+  become saved facts. Shared original-sentence checks retain comma/conjunction
+  continuations and reject interrogative heads and negative assessments. The same
+  guard protects scalar charges and item values. Positive VAT assertions, unrelated
+  sentences and work descriptions such as a wrong valve remain supported.
+  Application code still owns all rules.
+- Rejecting a stale completion preserved newer notes/version but cleared its
+  pending VAT clarification and refreshed activity. Finishing that old run now
+  leaves the entire newer state intact and preserves the usage reservation.
+- Non-breaking and narrow non-breaking spaces could conceal Irish/international
+  phones in provider context. Shared horizontal separators now handle these while
+  preserving monetary values, dates and numeric reference controls.
+
+| Additional regression evidence | Before correction | After correction |
+| --- | --- | --- |
+| 127 full-message financial/VAT unit cases, including positive controls | 102 failures / 25 passes against `fb8db2b` | All 127 pass |
+| 33 Unicode phone-spacing and numeric-control unit cases | 15 failures / 18 passes against `fb8db2b` | All 33 pass |
+| 37 restricted-role PostgreSQL correction/stale-state cases | All 37 fail against `fb8db2b` | All 37 pass |
+| Full subsequent provider payload with phone spacing and preserved money | Four extra variants extend the existing payload scenario | All 8 variants pass |
+
+The new modules are `test_tara_followup_financial.py`,
+`test_tara_phone_spacing.py` and `test_tara_followup_corrections.py` under the
+existing unit/integration test directories. The existing full-payload phone test
+adds four parameters; no original test or assertion was removed or weakened.
+The focused financial/name suite passed 520 cases; all 70
+provider/component/isolation tests passed.
+The final service boundary run passed 85 restricted-role PostgreSQL cases
+(37 new and 48 existing review/state cases) in 60.78 seconds.
+No further correction was needed to the existing item selector, response authority,
+duplicate-expiry identity check, superseded-contact minimisation or isolated
+provider lifecycle. Their original regressions remain in the complete suite.
+
+One initial provider retry test reached its two-second deadline while importing
+the child SDK under concurrent load, before its mocked request event. The isolated
+rerun and complete 70-case provider rerun passed; the deadline remained enforced.
+The first complete continuation run found one compatibility regression: the valid
+`No VAT, not registered.` scenario was rejected (1 failed / 1,303 passed in
+196.27s). A narrow affirmative-registration exception and positive regression
+restore it while related questions/rejections still fail closed. The unchanged
+end-to-end scenario passed afterward; the full final suite was rerun. No test was
+weakened. Docker setup also needed a readable copy of the
+unchanged init script because this workspace materialises it with mode 0700.
+The final runtime image built after the shared assertion fix was
+`sha256:daa5bb0de4b6527608564e062761f010f26e20e972cde91b00cf63f10804b3ca`.
+Its smoke verified owner migrations/grants, restricted-role checks, UID 10001,
+API live/ready, one real mock/local worker turn and controlled outbound, missing
+context RLS, and the packaged isolated launcher. In-image hashes of all four
+changed source files matched the frozen tree. BuildKit supplied the approved
+complete CA bundle as a secret; TLS and proxy trust remained enabled.
+
 ## Operational changes and limitations
 
 No dependency, database migration, grant or RLS change is introduced by these
@@ -142,6 +213,9 @@ It cannot prove every semantic interpretation of arbitrary prose. VAT checks do
 not establish tax compliance. Current user input and unrecognised sensitive free
 text may still reach the provider: pattern minimisation is not universal PII
 detection, physical erasure or a retention policy.
+Phone patterns retain ambiguous-boundary limits: a phone immediately followed by
+another unlabelled numeric phrase can remain unredacted or consume that phrase.
+Unicode-spacing support does not resolve arbitrary numeric ambiguity.
 
 **Production remains blocked** by physical retention/deletion, subject-rights and
 vendor/backup workflows, provider/privacy/DPA/transfer and Irish tax review,
