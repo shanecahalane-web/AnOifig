@@ -98,6 +98,23 @@ def expire(database, identifiers):
         )
 
 
+def advance_polling_cooldowns(database):
+    """Advance the polling clock only after both test workers have joined.
+
+    Keep source retry times, receipts, active leases and delivery state intact.
+    Skip metadata rows locked by the test; those locks must remain effective.
+    """
+    with database.admin.begin() as connection:
+        connection.execute(
+            text(
+                "UPDATE message_jobs SET claim_until = statement_timestamp() - interval '1 second' "
+                "WHERE id IN (SELECT id FROM message_jobs "
+                "WHERE ready AND due_at <= statement_timestamp() "
+                "AND claim_token IS NULL AND claim_until IS NOT NULL FOR UPDATE SKIP LOCKED)"
+            )
+        )
+
+
 def finish(database, seed, deliveries, *, tenant):
     """Settle queue-only load through the real runtime RLS and receipt gateway."""
     if not deliveries:
@@ -260,6 +277,7 @@ def test_concurrent_workers_recover_expiry_and_bypass_locked_rows_without_duplic
         for _ in range(4):
             parallel_batches()
             expire(database, locked_sources)
+            advance_polling_cooldowns(database)
         assert len(provider.calls) == 101  # tenant B's 100 unlocked inputs + A's recovered input
         assert all(
             message["processed_at"] is None
@@ -282,13 +300,7 @@ def test_concurrent_workers_recover_expiry_and_bypass_locked_rows_without_duplic
         # Source order can require another polling turn after a predecessor
         # settles. Advance the test's cooldowns after both workers have joined;
         # do not alter source retry times, receipts or external delivery state.
-        with database.admin.begin() as connection:
-            connection.execute(
-                text(
-                    "UPDATE message_jobs SET claim_until = now() - interval '1 second' "
-                    "WHERE ready AND due_at <= now()"
-                )
-            )
+        advance_polling_cooldowns(database)
         parallel_batches()
         if len(provider.calls) == 202:
             break

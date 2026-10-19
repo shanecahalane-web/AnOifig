@@ -61,7 +61,7 @@ adapter; 13 additional tests verify the public synchronous process boundary.
 
 | Check | Final local result |
 | --- | --- |
-| Complete pytest, real PostgreSQL, no skips | **1,080 passed in 146.71 seconds** |
+| Complete pytest, real PostgreSQL, no skips | **1,080 passed**; exact final local/CI timings recorded in PR #4 |
 | Ruff lint / formatting | Passed; 96 Python files formatted |
 | Strict Mypy | Passed; 39 source files |
 | Bandit | Passed; no findings |
@@ -80,6 +80,15 @@ currency-code alternatives. Atomic lexical matches correct this; an isolated
 regression with 800 repetitions completes within its 3-second test bound, while
 the preceding correction implementation times out. This safeguard is included
 in the final full suite and image.
+GitHub run 13 exposed a pre-existing fairness-test clock assumption: four fast
+parallel batches could finish before one-second contention cooldowns elapsed,
+yielding 35 rather than 101 sends at its intermediate assertion. The test now
+advances only tokenless, non-null polling cooldowns after both workers join,
+using `FOR UPDATE SKIP LOCKED` to preserve its held metadata lock. Active leases,
+receipts, source retry times, ordering and delivery state remain unchanged. All
+original four-batch, 101/202-send, duplication and RLS assertions remain; separate
+tests still verify real cooldown exclusion and expired-receipt fencing. Three
+focused repetitions and the complete suite verify the test-clock correction.
 
 Existing migration tests retain 0005→0006→0005→0006 value comparisons, legacy NULL
 compatibility, RLS, owners/ACLs, constraints and metadata checks. Existing recovery,
