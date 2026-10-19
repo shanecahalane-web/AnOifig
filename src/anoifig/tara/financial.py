@@ -440,6 +440,10 @@ def role_matches(
         )
         return not price and (quantity or noun)
     if role in {"amount", "labour", "materials"}:
+        # Quantity shorthand is not a stated scalar charge. Neither operand
+        # supplies the amount, even when only the price has a currency marker.
+        if re.search(r"(?<!\w)[0-9][0-9.,]*\s*[xX]\s*(?:€|EUR|euros?)?\s*[0-9]", text, re.I):
+            return False
         labels = list(
             re.finditer(r"\b(labou?r|materials?|amount|total|charge|price)\b", text, re.I)
         )

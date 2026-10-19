@@ -125,6 +125,20 @@ def test_scalar_roles_cannot_exchange_labour_and_materials():
     assert (result.labour, result.materials) == ("100", "200")
 
 
+@pytest.mark.parametrize("field", ["amount", "labour", "materials"])
+@pytest.mark.parametrize(
+    "expression,value",
+    [("3x25", "3"), ("3X€25", "25"), ("500 x 2", "500"), ("3 x EUR25", "25")],
+)
+def test_quantity_shorthand_cannot_become_a_scalar_charge(field, expression, value):
+    message = f"Change {field} to {expression}"
+    original = InvoiceNotes(amount="450", labour="100", materials="350")
+    before = original.model_dump()
+    with pytest.raises(ValueError):
+        apply_proposal(original, scalar(field, value, message), message)
+    assert original.model_dump() == before
+
+
 def stored_items():
     return InvoiceNotes.model_validate(
         {
