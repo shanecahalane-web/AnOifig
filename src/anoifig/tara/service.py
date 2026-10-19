@@ -123,6 +123,15 @@ class TaraService:
             )
             if first != message.id or message.available_at > now:
                 return False
+            # A redelivery must be read-only while the original turn owns its
+            # run. In particular, it must not expire memory or advance the
+            # version captured by an in-flight provider request.
+            run = session.get(TaraRun, message.id)
+            if run is not None:
+                if run.status == "complete":
+                    return True
+                if run.expires_at > now:
+                    return False
             state = session.get(TaraState, conversation.id)
             if state is None:
                 state = TaraState(
@@ -142,13 +151,7 @@ class TaraService:
                 days=self.settings.tara_memory_days
             ):
                 self._clear_memory(state, message)
-            run = session.get(TaraRun, message.id)
             if run is not None:
-                if run.status == "complete":
-                    # The same transaction normally marked the message processed.
-                    return True
-                if run.expires_at > now:
-                    return False
                 self._finish(session, message, state, run, FALLBACK, "processing_interrupted")
                 return True
             run = TaraRun(
@@ -222,6 +225,7 @@ class TaraService:
         # Acceptance position is durable even if following messages are already queued.
         state.notes, state.pending_clarification = {}, None
         state.memory_since, state.memory_after_id = message.received_at, message.id
+        state.updated_at = datetime.now(UTC)
         state.version += 1
 
     def _history(
@@ -235,7 +239,7 @@ class TaraService:
         if not self.settings.tara_history_messages:
             return ()
         query = (
-            select(Message, TaraRun.intent)
+            select(Message, TaraRun.intent, TaraRun.action)
             .outerjoin(
                 TaraRun,
                 (TaraRun.message_id == Message.id) & (TaraRun.tenant_id == Message.tenant_id),
@@ -245,6 +249,12 @@ class TaraService:
                 Message.conversation_id == message.conversation_id,
                 Message.direction == "inbound",
                 Message.processed_at.is_not(None),
+                # Successful structured edits are already represented by the
+                # validated notes. Never replay their raw text, including old
+                # contact corrections recorded before contact-specific audit
+                # metadata existed. This rule does not rely on model intent.
+                (TaraRun.action.is_(None))
+                | (TaraRun.action.not_in(("notes_merged", "contact_notes_merged"))),
                 Message.received_at >= now - timedelta(days=self.settings.tara_memory_days),
                 tuple_(Message.received_at, Message.id)
                 < tuple_(literal(message.received_at), literal(message.id)),
@@ -275,7 +285,7 @@ class TaraService:
                     else minimise(row.body, contact_details=notes.customer_details)[:600]
                 ),
             }
-            for row, intent in reversed(rows)
+            for row, intent, _action in reversed(rows)
         )
 
     @staticmethod
@@ -428,7 +438,13 @@ class TaraService:
             state.notes = notes.model_dump(mode="json")
             state.version += 1
             state.pending_clarification = self._pending(notes)
-            run.intent, run.action = decision.proposal.intent, "notes_merged"
+            # Audit contact-bearing edits from the accepted fields themselves,
+            # independently of the model's top-level intent classification.
+            contact_bearing = any(
+                change.field == "customer_details" for change in decision.proposal.changes
+            )
+            run.intent = decision.proposal.intent
+            run.action = "contact_notes_merged" if contact_bearing else "notes_merged"
             return render_notes(notes, correction=decision.proposal.intent == "correction")
         if decision.reply is None:
             raise ValueError("missing structured reply")
@@ -436,6 +452,9 @@ class TaraService:
         if decision.reply.intent in {Intent.UNSUPPORTED, Intent.FUNCTIONALITY}:
             state.pending_clarification = None
             return CAPABILITIES
+        if decision.reply.intent == Intent.CLARIFICATION:
+            state.pending_clarification = None
+            return INVALID
         if decision.reply.intent != Intent.GENERAL:
             notes = InvoiceNotes.model_validate(state.notes)
             state.pending_clarification = self._pending(notes)

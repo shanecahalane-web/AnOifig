@@ -1,114 +1,132 @@
-# Milestone 3 corrections: validation and readiness
+# Milestone 3: final independent-review corrections
 
-Validated locally on 16 October 2026 on `codex/milestone-3-tara`, correcting the
-independent review of `5cd753e7e3065d7a9c54d61686665e7bfc4fcc39` in PR #4.
-Python 3.13.5, PostgreSQL 17.11 and dedicated disposable databases with separate
-owner/restricted runtime roles were used. No live OpenAI/Twilio, Azure deployment,
-frontend changes, invoice issuance or merge was performed.
+Corrections to the review of `5adbfc6094f267c44e2ce7517cba4198a041a135`,
+on the existing `codex/milestone-3-tara` branch and PR #4. Validation used Python
+3.13.5 and disposable PostgreSQL 17 databases with separate schema-owner and
+restricted runtime roles, on 18–19 October 2026. No live OpenAI/Twilio account,
+Azure resource, marketing change, invoice issuance or merge was involved.
 
-## Corrected defects and source map
+## Eight findings
 
-| Finding | Result | Source |
+| Finding | Correction | Source / regression |
 | --- | --- | --- |
-| High: cropped financial/VAT evidence | Full original-message offsets preserve numeric boundaries, currency, sign and precision; ambiguous evidence fails. VAT needs explicit VAT context or matching pending clarification. Decimal values stay exact. | `tara/schemas.py` |
-| Medium: selective corrections | Typed item patches bind to the application-captured notes version, exact index, unique description and current-message selector; merge only changed fields. Duplicate/stale/ambiguous patches fail. | `tara/schemas.py`, `tara/service.py` |
-| Medium: queued reset loses context | Reset/expiry frontier uses source acceptance `(received_at,id)`; later accepted messages survive processing delay, earlier context stays excluded. | `tara/service.py`, `db/tara_models.py` |
-| Medium: stale financial reply overtakes correction | Conversation-serialised dispatch gates later replies behind unresolved predecessors; durable source order includes UUID ties. Uncertain sends require callback/operator reconciliation. | `messaging/worker.py` |
-| Medium: unbounded Tara DB failures | Existing retry ledger covers preparation/completion errors, head only. Terminal recovery produces one fallback, fences late results and preserves reservations. Lost acknowledgements reconcile committed state. | `messaging/worker.py`, `tara/service.py` |
-| Medium: false business-action claims | Model text is never rendered. Reviewed speech acts, note questions and capability templates are application-controlled. No invoice/email/payment tool exists. | `tara/schemas.py`, `tara/service.py`, `tara/prompt.py` |
-| Low: unnecessary contact replay | Minimal inbound history plus structured state; omit contact turns/details, redact common email/phone/IBAN patterns and do not replay outbound prose. Full payload tests include unstructured private markers. | `tara/privacy.py`, `tara/service.py` |
-| Low: SDK retry deadline | Cancellable async HTTP/retry operation under one wall-clock deadline, default 60/max 90 seconds, below 120-second run fence; no detached provider task. | `tara/provider.py`, `config.py` |
-| Production blocker: physical retention | Concrete proposed dormant purge, subject-rights, vendor and backup design; implementation/testing remains a release gate. | `docs/retention-and-deletion.md` |
+| High: financial evidence | Validate original expressions before accepting a numeric substring: currency vocabulary/symbols, signs/accounting notation, precision/grouping, alternatives, uncertainty and numeric role. Unsupported or contradictory expressions preserve saved values and request clarification. | `tara/financial.py`, `tara/schemas.py`; `test_tara_expression_safety.py`, persisted correction tests |
+| Medium: line-item correction | Bind selector and changed values to one original item clause and quantity/price role. Reject preservation/negation, ambiguous or repeated descriptions, borrowed prices, historical alternatives and stale versions. Existing lists require selective patches or an explicit whole-list replacement. | `tara/schemas.py`, `tara/financial.py`; expression and PostgreSQL correction tests |
+| Medium: VAT polarity | Validate full positive VAT-specific assertions, including shared negation and alternatives. Bare answers still require the matching application-owned pending question. No rate is inferred. | `tara/schemas.py`; expression and persisted VAT tests |
+| Medium: false action claims | Bounded single-line customer-name validation; fixed application status statements. A revalidated customer name appears only as separately labelled, quoted data. Invalid legacy labels are omitted. No model prose or other free-text note field becomes a status assertion. | `tara/schemas.py`, `tara/service.py`, prompt v3; name and full persisted outbound tests |
+| Medium: duplicate delivery during expiry | Check existing run identity before expiring state. Duplicate processing cannot advance memory/version or reserve again; accepted expiry refreshes activity time. Original completion and genuine stale-result fences remain intact. | `tara/service.py`; sequential/concurrent restricted-role PostgreSQL tests |
+| Medium: DNS/provider teardown | Each SDK request runs in a fresh Linux interpreter. Parent deadline contains resolver threads, retries, cancellation and executor shutdown; bounded terminate/kill cleanup and parent-death signalling prevent intentional detached work. Child has no DB/Twilio credentials or completion authority. | `tara/provider*.py`; real HTTPX resolver, cancellation, retry, IPC and parent-death tests |
+| Low: superseded contacts | Exclude raw successful structured-edit turns regardless of model intent, including legacy `notes_merged` records. Contact-bearing edits receive audit metadata based on accepted fields. Validated notes carry the current task context. | `tara/service.py`; full-payload correction and legacy-action PostgreSQL tests |
+| Low: Irish telephone redaction | Numbering-area/subscriber-length matching covers domestic and +353/00353 formats with common separators. Monetary/date/reference controls protect ordinary numbers. | `tara/privacy.py`; unit and full-provider-payload tests |
 
-Paths above are under `src/anoifig/` unless prefixed `docs/`. Supporting changes:
-`messaging/service.py` stamps application state versions on source/reply records;
-`db/messaging_models.py` and migration 0006 add nullable metadata/checks without
-rewriting existing data or changing grants/RLS. `.env.example`, `compose.yaml`,
-ADR 0006 and the Tara runbook describe the contracts and deadline settings.
-Historical migration fixtures now explicitly insert historical columns; two
-concurrency tests advance only polling cooldown after joined workers, preserving
-all tenant, fairness, idempotency and delivery assertions under ordered dispatch.
+Source paths above are under `src/anoifig/`; new unit modules are under
+`tests/unit/`. The new PostgreSQL module is
+`tests/integration/test_tara_review_corrections.py`.
+
+All six reported merge-blocking defects are corrected within the documented
+supported grammar and Linux runtime boundary. This prepares the development PR
+for another independent review; it does not establish production readiness.
 
 ## Before and after evidence
 
-Original-source comparisons used an untouched `git archive`/`git show` of the
-reviewed commit in temporary directories, the same regression code, offline
-providers, and separate disposable databases. The reviewed working tree was not
-rewritten to obtain baseline results.
+An untouched `git archive` of the reviewed commit received the same new regression
+files. It used a separate disposable database; the reviewed branch was not
+rewritten to manufacture failures.
 
-| Regression | Reviewed source | Corrected source |
+| Evidence | Reviewed commit | Corrected implementation |
 | --- | --- | --- |
-| Financial/VAT adversarial selection | 149 failed, 8 passed, 32 deselected | All 189 financial unit cases pass; all six exact reported unsafe updates reject |
-| State correction module (initial 10 cases) | 9 failed, 1 passed | 10 pass; UUID ordering already passed both |
-| Reset followed by queued BLUEBIRD then greeting | BLUEBIRD absent | BLUEBIRD retained; pre-reset SECRET absent |
-| Changed notes version during provider gap | New 700 overwritten by stale 500 | New 700 retained; one safe fallback |
-| Selective item-price correction | Existing replacement required repeating unchanged evidence; patch schema absent | Three valves retained, price 25→30, elbows preserved; duplicate delivery unchanged |
-| Prior contact followed by greeting | Email/private marker remains in full payload | Contact email/phone/IBAN/private marker absent from full next payload |
-| Five action-claim paraphrases | Model prose returned verbatim | Application speech acts only |
-| Rapid corrections plus rejected send/restart | Later reply dispatches past unresolved predecessor | Durable 450→500→550 send order |
-| DB preparation failure | SQL error escapes retry accounting | Five failures then one fallback; next turn advances |
-| Retry-After deadline | Existing SDK could request two 60-second waits despite per-attempt HTTP bounds | Real SDK async mock transport cancels 60-second retry wait within configured 1-second deadline; in-flight HTTP also cancels/closes |
+| New expression/name/privacy unit cases | 147 failed, 55 passed, including seven expectations for the new labelled name display | All 202 pass |
+| New signed-ingress PostgreSQL cases | 20 failed, 9 passed; one new clarification-enum case excluded from baseline because the enum did not exist | All 30 pass |
+| Actual DNS resolution / executor shutdown, configured 2-second deadline | Default SDK/HTTPX resolver stub sleeps 3.5 seconds; adapter returns after 3.892 seconds, with `dns_started` and `dns_finished` | Isolated adapter returns after 2.008 seconds; `dns_started` recorded, child stopped before `dns_finished` |
+| Unsupported currency, word-negative and unresolved amount alternatives | Unsafe updates accepted | Existing amount preserved and one controlled clarification persisted |
+| Cropped elbows/valves selector | Wrong item can change | Wrong item rejected; positive elbows patch preserves valves and quantities |
+| VAT negation / alternatives | Unsupported rate accepted | Previous rate preserved; affirmative VAT controls pass |
+| Customer-name action injection | Injected email/payment claims appear in persisted reply | Invalid name rejected; persisted reply uses controlled application text |
+| Dormant memory, duplicate active delivery | State version advances and invalidates original result | Sequential/concurrent duplicates preserve original result and reservation; genuine newer state still wins |
+| Corrected contact then greeting | Superseded address/private marker returns in payload | Superseded and current stored contacts absent from complete next payload, including legacy audit actions |
+| Irish geographic/international phone formats | Reported values survive provider context | Reported values removed; valid €1,500.25 preserved |
 
-Committed regression modules: `tests/unit/test_tara_financial.py`, updated
-`tests/unit/test_tara_provider.py`, `tests/integration/test_tara_state_corrections.py`,
-`test_tara_delivery_recovery.py` and `test_tara_boundary_migration.py`.
-The 10 new delivery/recovery tests pass against real PostgreSQL. Two copied
-outbox/failure tests both fail against the reviewed commit. Four further
-PostgreSQL cases verify matching VAT pending questions and invalidation by social,
-reset or unsupported interruptions. Migration tests compare every old source,
-claim, notes/run/usage value across 0005→0006→0005→0006, plus RLS, table/function
-owners/ACLs, legacy NULL compatibility, new constraints and Alembic metadata.
+The provider deadline tests use the real HTTP connection/resolver path with a
+local blocking resolver stub. They do not perform external DNS or contact a live
+API. Additional tests cover a resolver ignoring SIGTERM, SDK Retry-After waits,
+transport cancellation resistance, KeyboardInterrupt, worker SIGKILL, malformed
+and oversized IPC, fixed command arguments, and proxy/CA environment preservation.
 
-## Release checks
+## Complete validation
 
-| Check | Result |
+The full suite contains **1,079 tests**: the existing 834 plus 245 new cases.
+No existing assertion or scenario was removed or weakened. The existing 57 SDK
+tests now exercise the same async serializer/parser component inside the isolated
+adapter; 13 additional tests verify the public synchronous process boundary.
+
+| Check | Final local result |
 | --- | --- |
-| Complete pytest, including all Milestone 1/2 regressions | **834 passed**, 137.19 seconds; no skips |
-| Frozen dependency sync | Passed, 70 installed packages checked |
-| Ruff lint / formatting | Passed, 84 Python files formatted |
-| Mypy | Passed, 35 source files |
-| Bandit | Passed, no findings |
-| Locked dependency audit | No known vulnerabilities/adverse project statuses in 72 packages |
-| Docker | Runtime image built with verified CA trust; owner migration/runtime grants, API live/ready, UID 10001 and mock/local worker `--once` passed |
-| Compose configuration | `docker compose --env-file .env.example config --quiet` passed |
-| GitHub Actions | Linked from PR #4 after push |
+| Complete pytest, real PostgreSQL, no skips | **1,079 passed in 147.01 seconds** |
+| Ruff lint / formatting | Passed; 96 Python files formatted |
+| Strict Mypy | Passed; 39 source files |
+| Bandit | Passed; no findings |
+| Frozen dependency sync | Passed; 70 installed packages checked |
+| Locked OSV audit | No known vulnerabilities or adverse project statuses in 72 packages |
+| Docker runtime build / smoke | Passed: owner migration/runtime grants, API live/ready, UID 10001, mock/local worker, final controlled display and packaged isolated launcher |
+| Compose configuration | Passed |
+| GitHub Actions | Exact uploaded-commit run and outcome recorded in PR #4's description/checks |
 
-The historical fixture now inserts only columns available at its target revision.
-Concurrency helpers advance only polling cooldown after workers have joined;
-source retry times, receipts, delivery states and security assertions are retained.
-Of the original-source failures above, 120 numeric-span cases use the unchanged
-public proposal API and all fail independently of new feature/schema parameters.
-The nine added word-sign cases also reject "minus €500" / "negative 500" rather
-than interpreting them as a positive charge.
+The initial full run exposed three legitimate-name display expectations and a
+terminal-punctuation selector regression; both were corrected without weakening
+tests. A Docker network change briefly interrupted local PostgreSQL connections;
+affected validation was repeated after networking stabilised.
 
-No automated test calls OpenAI or Twilio. SDK serializers/parsers and retry logic
-use in-memory HTTP transports. Scripted conversations prove application contracts,
-not live model extraction quality. Adversarial parameter matrices and multi-turn
-invariants challenge validators independently of a model; PostgreSQL tests verify
-locks, state persistence, authorisation, RLS and recovery with the runtime role.
+Existing migration tests retain 0005→0006→0005→0006 value comparisons, legacy NULL
+compatibility, RLS, owners/ACLs, constraints and metadata checks. Existing recovery,
+lost-commit acknowledgement, queue/outbox/deduplication, uncertain-send ordering,
+multi-tenant and raw restricted-role isolation tests remain part of the full suite.
 
-## Readiness assessment
+Reproduce against dedicated disposable test databases:
 
-Prepared for another focused independent development review once CI is green;
-this is not a merge or production approval. The full source changes and the
-regressions are reviewable in PR #4.
+```sh
+uv sync --frozen
+uv run --frozen pytest -ra
+uv run --frozen ruff check .
+uv run --frozen ruff format --check .
+uv run --frozen mypy src
+uv run --frozen bandit -r src -q
+uv audit --locked
+```
 
-**Production remains blocked.** Implement and test scheduled physical erasure of
-dormant notes/raw messages, subject-rights workflows and vendor/backup treatment
-in the [retention design](../retention-and-deletion.md). Approve real provider
-terms, account spend limits, model/prices and realistic extraction evaluation;
-complete privacy/DPA/transfer and Irish tax review, observability/ownership, abuse
-controls, secrets rotation, load/failure and backup/restore testing. Arbitrary
-free text can still contain PII beyond supported redaction patterns. Source-token
-validation cannot prove all semantic interpretation correct. Cancellation does
-not prove an already accepted upstream request incurred no cost; reservations are
-never refunded, and estimates are not a provider billing guarantee. Uncertain
-WhatsApp sends intentionally block newer replies until reconciled; application
-send ordering does not guarantee mobile-network arrival order.
+## Operational changes and limitations
 
-Pause API/workers for migrations and verify grants before resuming. Migration 0005
-downgrade deletes Tara notes/audit/budgets while preserving messaging records;
-never use it to reset live usage. Migration 0006 downgrade preserves all old values
-but removes the new reset/clarification/version metadata and restores known 0005
-behaviour. Prefer a forward fix. See [ADR 0006](../adr/0006-tara-conversations.md)
-and the [Tara runbook](../runbooks/tara.md).
+No dependency, database migration, grant or RLS change is introduced by these
+corrections. Migration 0006 and its rollback behaviour remain unchanged. Never
+downgrade 0005 to reset usage: it deletes Tara notes/audit/budgets. Prefer forward
+fixes; pause workers/API and verify grants for separately approved migrations.
+
+OpenAI mode now requires Linux with `prctl` parent-death signalling and `memfd`.
+The fixed child receives only minimal JSON request/configuration through private
+stdin; proxy/CA settings survive, TLS stays enabled, DB/Twilio secrets do not.
+Output uses bounded validated JSON over anonymous memory. Default deadline is
+60 seconds, maximum 90, followed by at most 0.25 seconds each for terminate and
+kill/reap under normal host scheduling, below the 120-second run fence.
+Acknowledgement/mock development modes remain available without live accounts.
+
+Kernel/process-creation failure, uninterruptible tasks or host starvation prevent
+an absolute hard-real-time guarantee. Staging must validate host supervision and
+resource/failure behaviour. Cancellation cannot undo a remotely accepted request
+or guarantee zero spending. Conservative reservations remain charged; retries stay
+bounded, and late results cannot commit after durable completion/version fences.
+
+The financial grammar deliberately asks for a clear single value for unsupported
+grouping, arithmetic, historical from/to expressions or ambiguous item selection.
+It cannot prove every semantic interpretation of arbitrary prose. VAT checks do
+not establish tax compliance. Current user input and unrecognised sensitive free
+text may still reach the provider: pattern minimisation is not universal PII
+detection, physical erasure or a retention policy.
+
+**Production remains blocked** by physical retention/deletion, subject-rights and
+vendor/backup workflows, provider/privacy/DPA/transfer and Irish tax review,
+realistic extraction evaluation, reviewed model/prices/account spend limits,
+operational monitoring/on-call, secrets rotation, abuse controls, staging/load and
+backup/restore validation. Uncertain WhatsApp sends require callback/operator
+resolution; application send ordering does not guarantee mobile-network arrival
+order. See [ADR 0007](../adr/0007-tara-evidence-and-provider-isolation.md), the
+[Tara runbook](../runbooks/tara.md) and the
+[retention design](../retention-and-deletion.md).

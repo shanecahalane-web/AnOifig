@@ -11,6 +11,9 @@ No live accounts, paid resources or deployment are needed. Invoice issuance,
 numbering, PDFs, financial delivery, voice and WhatsApp Flows remain unavailable.
 See [Tara configuration and testing](docs/runbooks/tara.md) and
 [the AI architecture decision](docs/adr/0006-tara-conversations.md).
+Real OpenAI execution uses an isolated local child process on supported Linux;
+see [the lifecycle and evidence contract](docs/adr/0007-tara-evidence-and-provider-isolation.md).
+Acknowledgement and mock modes remain available without live providers.
 
 Read [the production blueprint](An_Oifig_Production_Blueprint.md),
 [engineering rules](AGENTS.md), and [architecture decisions](docs/adr/0001-backend-foundation.md)

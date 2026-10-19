@@ -1,7 +1,8 @@
 # Tara configuration and local verification
 
 Tara now supports contextual conversations through the Milestone 2 messaging
-worker. Read [ADR 0006](../adr/0006-tara-conversations.md) for state, ordering,
+worker. Read [ADR 0006](../adr/0006-tara-conversations.md) and
+[ADR 0007](../adr/0007-tara-evidence-and-provider-isolation.md) for state, ordering,
 authorisation, privacy and recovery guarantees and their limits.
 
 ## Offline modes
@@ -26,7 +27,9 @@ Mock outputs are scripted expectations, **not evidence of a live model's extract
 accuracy**. Additional tests cover concurrent messages, head-of-conversation
 ordering, duplicate delivery, budgets, invalid outputs, SDK timeouts/retries,
 revocation during provider I/O, SIGKILL recovery and lost commit acknowledgement.
-The SDK's real serializers/parsers run over an in-memory HTTP transport.
+The SDK's real serializers/parsers run over an in-memory HTTP transport. Separate
+Linux subprocess tests exercise real HTTP connection resolution with stalled DNS,
+retry waits, cancellation and worker death, without live provider credentials.
 
 The complete release checks remain:
 
@@ -49,7 +52,7 @@ Every setting uses the `ANOIFIG_` prefix. Configuration is validated at startup.
 | `OPENAI_API_KEY` | SecretStr; no default; inject securely into the worker only |
 | `TARA_MODEL` | `gpt-4.1-mini`; select a model supporting strict tools and structured output |
 | `TARA_TIMEOUT_SECONDS` | 15 seconds per HTTP operation, range 1–30 |
-| `TARA_DEADLINE_SECONDS` | 60 seconds overall, range 1–90; cancels HTTP and SDK retry/Retry-After waits before the 120-second run fence |
+| `TARA_DEADLINE_SECONDS` | 60 seconds overall, range 1–90; parent bounds the Linux request child, then allows at most 0.25 seconds each for terminate and kill/reap, below the 120-second run fence |
 | `TARA_MAX_RETRIES` | 1 SDK retry, range 0–2 |
 | `TARA_MAX_INPUT_TOKENS` | 16000; conservative UTF-8/schema/framing bound checked before calling |
 | `TARA_MAX_OUTPUT_TOKENS` | 1200; passed as `max_completion_tokens` |
@@ -79,6 +82,17 @@ No live account connection is authorised by these instructions. Once separately
 authorised, configure key, current reviewed prices, model, tenant budgets and
 `openai` mode. Do not use SDK debug logging with customer conversations.
 
+OpenAI mode requires Linux. The worker starts a fixed isolated Python module for
+each turn, supplies the minimal request/configuration through private stdin, and
+retains only reviewed proxy, CA and locale environment settings. Database/Twilio
+credentials are not passed. TLS validation stays enabled. Parent-death signalling
+and bounded terminate/kill cleanup contain blocking DNS and executor teardown;
+cancelling an asyncio task alone cannot do that. Unsupported systems fail closed.
+The runtime image includes this module and supports these Linux mechanisms.
+Scheduling, process creation and uninterruptible kernel tasks prevent an absolute
+hard-real-time guarantee. A remote request accepted before cancellation may still
+be billed: reservations remain charged, and late results cannot commit notes.
+
 ## Instructions and conversation controls
 
 `src/anoifig/tara/prompt.py` is the reviewed instruction source. Change the
@@ -90,11 +104,18 @@ Invoice notes merge only supplied fields; absent fields survive interruptions.
 Corrections do not reset the task. Selective item patches bind to the application-owned
 notes version, exact item index/unique description and current-message selector.
 Only changed values need new evidence. Stale completions fail without overwriting
-newer notes. Full original financial spans validate signs, currency, precision and
-numeric context; unrelated prices/dates cannot supply VAT evidence. Bare VAT
+newer notes. Full original financial expressions validate signs, currencies,
+alternatives, precision and item-specific clauses; unrelated prices/dates cannot
+supply VAT evidence. Bare VAT
 answers require the matching application-owned pending clarification.
+Unsupported or ambiguous evidence preserves the previous notes and produces an
+application-controlled clarification. VAT rules and arithmetic remain application
+code; no tax-compliance conclusion is established by these checks.
 
-Social replies select a reviewed speech act; model text is never rendered. Business
+Social replies select a reviewed speech act; model text is never rendered. Untrusted
+note fields cannot become status assertions. Customer names are
+validated as bounded single-line data labels and displayed separately in quotes;
+invalid legacy labels are omitted. Business
 claims and capabilities come from application templates. No backend invoice,
 email, payment or financial-delivery action exists in this milestone. Application templates request customer, work,
 charges, VAT basis and then the user-supplied VAT rate when needed. No rate is
@@ -104,8 +125,12 @@ my notes` commands also reset context. They leave raw messaging/audit records
 subject to the [retention and deletion design](../retention-and-deletion.md).
 Reset uses the reset message's durable `(received_at, id)` boundary, so messages
 accepted afterward remain available even if already queued at processing time.
-History carries processed inbound turns plus structured notes and pending question;
-raw outbound prose is not replayed. Stored customer-contact turns are omitted,
+History carries a bounded subset of processed inbound turns plus structured notes
+and pending question; raw outbound prose is not replayed. All successful structured
+note-edit turns are omitted, including legacy records and contact corrections
+classified under other intents. Contact-bearing changes receive a distinct audit
+action, derived from accepted fields rather than intent. No migration is required.
+Stored customer-contact turns are omitted,
 and common email/phone/IBAN values are redacted from other stored context. The
 current user input still goes to the provider to extract explicitly supplied facts;
 this minimisation is not an arbitrary-PII detector or physical erasure.

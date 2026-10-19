@@ -6,11 +6,12 @@ import time
 
 import httpx
 import pytest
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, OpenAIError
 from pydantic import ValidationError
 
 from anoifig.config import Settings
-from anoifig.tara.provider import AIRequest, OpenAIProvider, ProviderFailure
+from anoifig.tara.provider import AIRequest, ProviderFailure
+from anoifig.tara.provider_transport import OpenAITransport, ProviderConfiguration
 from anoifig.tara.schemas import (
     InvoiceNotes,
     ProposedNotes,
@@ -56,6 +57,35 @@ def completion(message=None, **overrides):
     }
 
 
+def configuration(settings):
+    return ProviderConfiguration(
+        api_key=settings.openai_api_key,
+        model=settings.tara_model,
+        timeout_seconds=settings.tara_timeout_seconds,
+        deadline_seconds=settings.tara_deadline_seconds,
+        max_retries=settings.tara_max_retries,
+        max_output_tokens=settings.tara_max_output_tokens,
+    )
+
+
+class SDKComponent:
+    """Test only: serializer/parser assertions remain local to the async SDK.
+
+    The public sync adapter always isolates this component in a request child;
+    test_tara_provider_isolation separately verifies its lifecycle guarantees.
+    """
+
+    def __init__(self, settings, client=None):
+        self.transport = OpenAITransport(configuration(settings), client=client)
+        self.client = client
+
+    def respond(self, request):
+        try:
+            return asyncio.run(self.transport.respond(request))
+        except (TimeoutError, OpenAIError, ValidationError, ValueError, IndexError, AttributeError):
+            raise ProviderFailure from None
+
+
 def provider(settings, handler):
     client = AsyncOpenAI(
         api_key="synthetic-key-never-sent",
@@ -63,7 +93,7 @@ def provider(settings, handler):
         timeout=settings.tara_timeout_seconds,
         http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
     )
-    return OpenAIProvider(settings, client=client)
+    return SDKComponent(settings, client)
 
 
 REQUEST = AIRequest({}, (), "Hello Tara")
@@ -112,8 +142,8 @@ def test_worker_calls_create_and_close_distinct_async_clients(settings, monkeypa
         clients.append(client)
         return client
 
-    monkeypatch.setattr("anoifig.tara.provider.AsyncOpenAI", make_client)
-    subject = OpenAIProvider(settings)
+    monkeypatch.setattr("anoifig.tara.provider_transport.AsyncOpenAI", make_client)
+    subject = SDKComponent(settings)
     subject.respond(REQUEST)
     subject.respond(REQUEST)
     assert len(clients) == 2 and clients[0] is not clients[1]

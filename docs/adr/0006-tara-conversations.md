@@ -2,6 +2,10 @@
 
 Status: proposed for Milestone 3 review, 16 October 2026.
 
+The final review corrections in [ADR 0007](0007-tara-evidence-and-provider-isolation.md)
+refine financial-expression validation, response rendering, expiry, context replay
+and the provider execution boundary described here.
+
 ## Decision
 
 Use the supported OpenAI Python SDK through a small `AIProvider` protocol. Keep
@@ -15,8 +19,9 @@ OpenAI receives one bounded request with a versioned system instruction, validat
 preparation notes, a bounded history and the current message. Phone-link routing,
 tenant/user IDs, credentials and customer database records are never sent. Stored
 customer contact details are omitted from the structured notes supplied to the
-provider. Prior inbound context omits customer-contact turns, removes the stored
-contact-detail literal, and redacts common email/phone/IBAN patterns; outbound raw
+provider. Prior inbound context omits successful structured-edit turns, including
+legacy contact corrections regardless of intent, removes the stored contact-detail
+literal, and redacts common email/phone/IBAN patterns; outbound raw
 prose is not replayed. Current input still contains explicitly supplied user data,
 and arbitrary free text may contain PII these rules cannot recognise.
 
@@ -28,8 +33,10 @@ has a database handle or accepts tenant IDs, SQL, paths, code or invoice approva
 Application templates ask missing invoice questions and describe unsupported
 features. Social replies select one reviewed speech act; application templates
 render it.
-Raw model prose is never customer-visible, so it cannot assert an unperformed
-business action. No invoice/email/payment action exists to report as completed.
+Raw model prose and free-text note fields are never interpolated into assistant
+status assertions. Customer names receive structural validation and a separately
+labelled, quoted display; the preparation acknowledgement is fixed text. No invoice/email/payment action exists
+to report as completed.
 
 `InvoiceNotes` are **preparation notes**, not an invoice or financial draft. EUR
 amounts are decimal strings with at most two places and a maximum of €1,000,000.
@@ -57,15 +64,19 @@ exclusive; duplicate item/field changes and ambiguous selection are rejected.
    its acceptance timestamp after acquiring the same conversation lock. This is
    application acceptance order; Twilio provides no authoritative sender sequence
    for reconstructing messages delayed before ingress.
-2. Load per-conversation, per-user notes under forced RLS. Expire old notes and
+2. Check the existing run before changing memory on duplicate delivery. Load
+   per-conversation, per-user notes under forced RLS. Expire old notes and
    bound history by age/count/content size. Insert a unique `tara_runs` processing
    record, opaque token, two-minute deadline and conservative daily business
    reservation. Commit before provider I/O, releasing all locks/connections.
-3. Make an async SDK call behind the synchronous provider adapter with a cancellable
-   overall deadline (default 60 seconds, maximum 90). This includes HTTP I/O, SDK
-   retries and Retry-After delays. Each call owns/closes its async client; there is
-   no detached background provider thread. Per-HTTP timeout remains 15 seconds by
-   default. The overall deadline stays below the two-minute run fence.
+3. Run the async SDK in a fresh Linux child interpreter behind the synchronous
+   provider adapter. The parent bounds the complete operation (default 60 seconds,
+   maximum 90), then uses bounded terminate/kill cleanup. This contains blocking
+   resolver threads and SDK teardown as well as HTTP, retries and Retry-After
+   delays. Linux parent-death signalling kills the child if its worker dies.
+   Per-HTTP timeout remains 15 seconds by default. See ADR 0007 for the environment
+   boundary and operating-system limits; asyncio cancellation alone does not bound
+   DNS teardown. OpenAI mode fails closed outside Linux.
 4. In a fresh transaction recheck authorisation, lock the conversation/message,
    and require the same active run token and application-captured state version.
    A stale completion leaves the newer notes intact. Validate the outcome, apply
