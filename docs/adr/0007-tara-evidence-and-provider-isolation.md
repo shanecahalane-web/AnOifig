@@ -7,8 +7,10 @@ Status: proposed for Milestone 3 independent review, 18 October 2026.
 Validate proposed amounts against complete expressions in the original message,
 including currency, sign/accounting notation, uncertainty and alternatives. EUR
 decimal values use Decimal; unsupported syntax requests clarification and leaves
-the saved notes unchanged. Currency conversion, inferred prices, arithmetic and
-automatic VAT selection remain unavailable. This is a conservative supported
+the saved notes unchanged. Currency conversion, guessed prices, general arithmetic
+and automatic VAT selection remain unavailable. A proposed unit price can be
+validated against one item's stated quantity and total by exact Decimal product
+equality. This is a conservative supported
 language grammar, not a claim to understand arbitrary financial prose or tax law.
 Currency lexing commits overlapping code matches atomically so repeated currency
 words cannot cause exponential regex backtracking while holding a conversation
@@ -21,6 +23,15 @@ Bind item patches to the application-captured version and a complete original
 item clause. The clause must identify the selected item and support the changed
 quantity or unit-price role. A model-selected excerpt cannot borrow a value from
 another clause, omit negation or turn a preservation instruction into an update.
+Item-only connector boundaries include another item's bare price, without changing
+the scalar/VAT clause grammar. Numeric roles consider currency-marked and bare
+price labels. Total, subtotal and overall amounts cannot become unit prices via
+generic price/cost/at labels; deposits cannot supply a whole-line total. Explicit
+unit prices and line totals on the same item must agree. Derivation requires one
+supported, unambiguous item total and a source quantity, or the final captured
+quantity in a version-bound correction. The backend verifies the proposed
+quantity times unit price exactly, including quantity-only corrections. It never
+divides or rounds a quotient; non-exact cents and conflicting evidence clarify.
 VAT validation examines the polarity and alternatives of the full assertion;
 short answers still require the application's matching pending clarification.
 Questions and rejected assertions do not establish financial or VAT facts.
@@ -28,6 +39,16 @@ Shared assertion checks inspect the surrounding original sentence, including
 soft comma/conjunction continuations, when proposed evidence contains only a
 number or basis phrase. Hard sentence/semicolon/newline boundaries preserve
 independent affirmative statements alongside unrelated questions.
+Numeric-rate choices also retain textual exemption, no-VAT and zero-rating
+alternatives, including cropped evidence and formatted continuations. Recognising
+these terms does not map one tax treatment onto another: an explicit zero-percent
+rate stays a rate, and exemption cannot supply one. Conflicting comma/and
+treatment assertions also require clarification; a
+numeric rate plus inclusive/exclusive basis remains a compatible pair of facts.
+Treatment-replacement prose
+such as "instead of" or "rather than" requires a clear single-treatment restatement
+under the existing conservative historical-expression boundary. Rejections use
+an application-owned clarification question and preserve the prior notes.
 
 Customer names have bounded, single-line structure supporting Unicode personal
 and business names. Application status statements never interpolate customer names

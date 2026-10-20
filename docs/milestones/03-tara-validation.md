@@ -52,15 +52,15 @@ API. Additional tests cover a resolver ignoring SIGTERM, SDK Retry-After waits,
 transport cancellation resistance, KeyboardInterrupt, worker SIGKILL, malformed
 and oversized IPC, fixed command arguments, and proxy/CA environment preservation.
 
-## Complete validation
+## Complete validation at `2abd32b`
 
-The full suite now contains **1,305 tests**: the existing 834, the first 270
+The full suite at that reviewed head contained **1,305 tests**: the existing 834, the first 270
 correction cases, and 201 additional cases from the continuation review below.
 No existing assertion or scenario was removed or weakened. The existing 57 SDK
 tests now exercise the same async serializer/parser component inside the isolated
 adapter; 13 additional tests verify the public synchronous process boundary.
 
-| Check | Final local result |
+| Check | Local result at the reviewed head |
 | --- | --- |
 | Complete pytest, real PostgreSQL, no skips | **1,305 passed**, no skips, 184.08 seconds |
 | Ruff lint / formatting | Passed; 99 Python files formatted |
@@ -185,6 +185,133 @@ API live/ready, one real mock/local worker turn and controlled outbound, missing
 context RLS, and the packaged isolated launcher. In-image hashes of all four
 changed source files matched the frozen tree. BuildKit supplied the approved
 complete CA bundle as a secret; TLS and proxy trust remained enabled.
+
+## Three remaining financial merge blockers, 20 October 2026
+
+The independent review of `2abd32bdd6e209d94d0d0ab544e5b81c7a4b053a`
+reproduced three P2 defects through signed WhatsApp ingress and restricted-role
+PostgreSQL: line totals could become unit prices, another item's bare price could
+be borrowed, and a numeric VAT rate could hide a textual exemption alternative.
+The following focused corrections address those persisted preparation-note defects.
+
+| Original input / proposal | Reviewed implementation | Corrected implementation |
+| --- | --- | --- |
+| `3 valves for a total price of €75`; quantity `3`, unit price `75` | Saves an implied €225 line | Rejects; prior notes survive; controlled clarification question |
+| Existing valves `3 × €25`; `Make valves total price €75`, proposed unit price `75` | Replaces €25 with €75 | Rejects; quantity, €25 price, other items and VAT survive |
+| `3 valves at €25 with elbows at 10`; proposed valves unit price `10` | Borrows the elbows price | Rejects, including bare/mixed-currency-marker and conjunction variations |
+| Existing VAT `exclusive / 13.5`; `VAT 23% or VAT exempt`, proposed rate `23` | Replaces 13.5 with 23 | Preserves both VAT fields and asks the controlled question |
+| One bound item, quantity `3`, total `75`, proposed unit price `25` | Rejects a derived price | Validates exact Decimal product `3 × 25 = 75`; never divides/rounds |
+| Quantity `3`, total `100`, proposed unit price `33.33` or `33.34` | Unsupported | Rejects both; no silently rounded quotient |
+
+Token-specific item roles distinguish quantity, unit price and monetary total.
+Generic price/cost/at markers cannot override total/subtotal/overall semantics;
+deposits do not establish a whole-item total. Explicit each/apiece/per-unit prices
+must agree with a separate stated line total. Final product validation also applies
+to quantity-only patches, using the final quantity and unchanged price. Derived
+corrections use the captured, version-bound quantity; source quantities cannot
+contradict it. Unsupported precision cannot disappear from the numeric candidates.
+
+Item-only connector boundaries keep bare prices with their own description.
+All relevant price markers participate in ambiguity checks. Repeated original
+clauses for the same selected item clarify, even if model evidence crops out the
+other clause. A bounded numeric-list regression protects ingress-sized repeated
+prices; independent 500/800-repetition probes rejected in approximately 0.05/0.12s.
+The existing positive `a total of 3 valves at €25 each` remains supported: its
+count-total phrase is distinct from a monetary line total.
+
+VAT guards retain exempt/exemption, zero-rated and no-VAT alternatives across
+or/vs/slash, choice syntax and formatted continuations. Independent probing added
+the `VAT 23% or` + newline + `VAT exempt` case before final verification. Historical
+replacement comparisons using instead-of/rather-than require a clear restatement.
+An affirmative zero-percent rate remains a rate; no exemption/zero-rating mapping
+or Irish tax rule is introduced. Prompt version `tara-2026-10-20-v4` describes the
+same evidence boundary. Rejection text is an application-owned question, with no
+successful-update acknowledgement.
+
+### Before/after evidence and regression coverage
+
+Tests were written before source corrections. The first combined run on pristine
+`2abd32b` produced **116 failures / 63 passes**. The final three added modules
+contain **294 cases**: 86 item-evidence unit cases, 148 VAT unit cases and 60 signed
+ingress/PostgreSQL cases. The tests-only commit
+`fa2cb9f7f47a077564ffbbd4859dfb5e7963031e` retains the reviewed implementation and
+the final regression files, so the before result is reproducible independently.
+
+A fresh untouched archive of `2abd32b` received only those three final test files.
+All four implementation files were compared byte-for-byte with the reviewed Git
+objects, and the imported schema path was asserted to be the archive's source.
+Using a separate disposable `baseline_fixes_test` database, the final before run
+produced **215 failures / 79 passes in 47.37s**. These failures include unsafe
+acceptance, the newly allowed exact-product positive cases, stricter clause checks
+and the required clarification-question behaviour; they are not a claim of 192
+distinct defects. No reviewed implementation file or existing assertion was edited
+to manufacture the before result.
+
+The added modules are:
+
+- `tests/unit/test_tara_item_evidence.py`
+- `tests/unit/test_tara_vat_alternatives.py`
+- `tests/integration/test_tara_merge_blockers.py`
+
+Run the same focused comparison on the tests-only commit and corrected head:
+
+```sh
+uv sync --frozen
+# Configure separate owner/runtime connections to a dedicated disposable *_test DB.
+uv run --frozen pytest -ra tests/unit/test_tara_item_evidence.py \
+  tests/unit/test_tara_vat_alternatives.py tests/integration/test_tara_merge_blockers.py
+```
+
+The integration assertions cover acceptance/rejection, complete persisted notes,
+exact item quantities/prices and VAT fields, unchanged version on rejection, one
+controlled reply, safe run action/error metadata, and absence of a successful
+update acknowledgement. Positive controls preserve unrelated items/fields. All
+original **1,305** tests remain; the complete corrected suite contains **1,599**.
+Final full-suite and CI outcomes are recorded below and in PR #4.
+
+| Final correction check | Result |
+| --- | --- |
+| Complete Python 3.13.5 suite, PostgreSQL 17, separate owner/runtime roles | **1,599 passed**, no skips, 198.95s |
+| Frozen dependency sync | Passed; 70 installed packages checked |
+| Ruff lint / formatting | Passed; 102 Python files formatted |
+| Strict Mypy | Passed; 39 source files |
+| Bandit | Passed; no findings |
+| Locked OSV audit | No known vulnerabilities or adverse statuses in 72 packages |
+| Final runtime Docker build/smoke and source hashes | Passed; details below |
+| GitHub Actions | Exact published-head run and confirmation recorded in PR #4 |
+
+The initial complete correction run exposed one compatibility regression in the
+unchanged `quantities_unit_prices` scenario: a nonnumeric work-description mention
+(`supply valves`) competed with the later numeric item assertion. That run ended
+with 1 failed / 1,571 passed. The clause rule now counts numeric assertions while
+retaining malformed numeric evidence; nonnumeric mentions do not create competing
+prices. A new positive unit case first reproduced the regression, and the original
+scenario/assertions remain unchanged. The complete suite and final Docker smoke
+were rerun after this focused correction.
+Final independent probing also added same-sentence comma/and conflicts between
+numeric rates and exemption/zero-rating/no-VAT statements. Those 26 additional
+checks include both proposal directions and persisted clarification controls.
+Compatible numeric-rate plus inclusive/exclusive basis assertions remain valid.
+The in-progress continuation run was stopped to include this guard, then the full
+final suite was restarted.
+
+The final runtime image is
+`sha256:7c9ea46b3e63e4046735fec9cff750045bc0844e3b601cccb99a87e637678011`.
+Its Docker smoke passed fresh migrations/grants, actual API liveness/readiness,
+UID 10001, raw restricted-role RLS, signed ingress with a real mock/local worker
+and outbox, the original three rejected corrections plus affirmative VAT, and the
+packaged isolated launcher with offline invalid input. In-image hashes of all
+four changed source files matched the frozen source. The unchanged Dockerfile
+received the approved combined CA bundle as a BuildKit secret; TLS stayed enabled.
+The external TestClient smoke emitted a dependency deprecation warning because
+httpx2 is a development-only dependency; all assertions passed and no runtime
+dependency change was required.
+
+No migration, dependency, RLS/grant, messaging lifecycle or provider-process change
+is introduced. General financial prose, ambiguous totals/selectors and historical
+treatment comparisons can still require a clear restatement. The new exact-product
+exception does not enable general arithmetic or tax calculations. Production gates
+remain separate.
 
 ## Operational changes and limitations
 

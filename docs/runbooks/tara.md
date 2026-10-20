@@ -111,6 +111,14 @@ answers require the matching application-owned pending clarification.
 Unsupported or ambiguous evidence preserves the previous notes and produces an
 application-controlled clarification. VAT rules and arithmetic remain application
 code; no tax-compliance conclusion is established by these checks.
+Item totals cannot be used as unit prices. A proposed derived unit price is accepted
+only when its exact Decimal product with the bound quantity equals one stated item
+total; corrections can use the captured quantity. No quotient is rounded. Conflicting
+totals, deposits and ambiguous item/price associations require clearer input.
+VAT choices involving a numeric rate, exemption, zero-rating or no VAT preserve
+the previous fields and ask a controlled question. Exemption is never translated
+into a zero-percent rate. State a single treatment/rate clearly instead of comparing
+it with a rejected historical alternative.
 
 Social replies select a reviewed speech act; model text is never rendered. Untrusted
 note fields cannot become status assertions. Customer names are

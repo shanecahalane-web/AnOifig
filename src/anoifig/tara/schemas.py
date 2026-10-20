@@ -14,9 +14,12 @@ from anoifig.tara.financial import (
     expression_context_safe,
     financial_negative_clause,
     inherited_negative,
+    item_clauses,
+    line_total_matches,
     negative_clause,
     nonassertive_expression,
     numeric_evidence,
+    unit_price_evidence,
 )
 from anoifig.tara.financial import (
     evidence_spans as _evidence_spans,
@@ -176,10 +179,72 @@ class Decision(StrictModel):
 PendingClarification = Literal["vat_basis", "vat_rate"]
 
 
+def _vat_treatment_alternatives(message: str) -> bool:
+    """A textual treatment can be the other side of a numeric VAT choice.
+
+    Recognising an expression here never maps exemption, zero rating or a rate
+    to each other. It only prevents either side of an unresolved choice from
+    being accepted as an affirmative instruction.
+    """
+    number = r"[0-9]+(?:\.[0-9]+)?"
+    percent = r"(?:%|per\s*cent\b|percent\b)"
+    treatments = list(
+        re.finditer(
+            rf"\bvat(?:\s+rate)?\s*(?:(?:is|at|of)\s+|:\s*)?{number}(?:\s*{percent})?"
+            rf"|(?<![\w.]){number}\s*{percent}"
+            r"|\b(?:vat\s+)?exempt(?:ion)?\b|\bzero[\s\u2010-\u2015-]+rated\b|\bno\s+vat\b"
+            r"|\bnot\s+(?:vat\s+registered|registered\s+(?:for\s+)?vat)\b"
+            r"|\b(?:(?:including|inclusive(?: of)?|incl\.?|inc\.?)\s+vat|vat included)\b"
+            r"|\b(?:before|excluding|exclusive(?: of)?|excl\.?|ex|plus)\s+vat\b",
+            message,
+            re.I,
+        )
+    )
+    alternative = (
+        r"\bor\b|\bversus\b|\bvs\.?\b|/|\balternatively\b|"
+        r"\binstead\s+of\b|\brather\s+than\b"
+    )
+    boundary = r"[;\n!?]|\.(?=\s|$)"
+
+    def treatment_kind(assertion: str) -> str:
+        if re.search(r"\bzero[\s\u2010-\u2015-]+rated\b", assertion, re.I):
+            return "zero_rated"
+        if re.search(r"\bexempt(?:ion)?\b", assertion, re.I):
+            return "exempt"
+        if re.search(r"\b(?:no|not)\b", assertion, re.I):
+            return "no_vat"
+        if re.search(r"[0-9]", assertion):
+            return "rate"
+        return "basis"
+
+    for left, right in zip(treatments, treatments[1:], strict=False):
+        bridge = message[left.end() : right.start()]
+        parts = re.split(boundary, bridge)
+        kinds = {treatment_kind(left.group()), treatment_kind(right.group())}
+        # Comma/and assertions can conflict without an explicit "or". A rate
+        # plus inclusive/exclusive basis remains a compatible pair of facts.
+        if len(parts) == 1 and len(kinds) > 1 and "basis" not in kinds:
+            return True
+        # Connectors on either side of formatting punctuation retain the choice.
+        # An unrelated earlier "or" cannot cross an independent sentence.
+        if re.search(alternative, bridge, re.I) and (
+            len(parts) == 1
+            or re.match(rf"\s*(?:{alternative})", parts[-1], re.I)
+            or re.search(rf"(?:{alternative})\s*$", parts[-2], re.I)
+            or re.search(rf"(?:{alternative})[\s,;:.!?()\[\]]*$", bridge, re.I)
+        ):
+            return True
+        if len(parts) == 1 and re.search(r"\band\b|,", bridge, re.I):
+            head = re.split(boundary, message[: left.start()])[-1]
+            if re.search(r"\b(?:choose|choice|either|between)\b", head, re.I):
+                return True
+    return False
+
+
 def vat_evidence(
     value: str, evidence: str, *, pending_clarification: PendingClarification | None = None
 ) -> bool:
-    if not expression_context_safe(evidence, []):
+    if not expression_context_safe(evidence, []) or _vat_treatment_alternatives(evidence):
         return False
     patterns = {
         "no_vat": r"\b(?:no vat|not vat registered|not registered (?:for )?vat|vat exempt)\b",
@@ -240,7 +305,9 @@ def _vat_rate_evidence(
     message: str,
     pending_clarification: PendingClarification | None,
 ) -> bool:
-    if not numeric_evidence(value, evidence, message, allow_percentage=True):
+    if _vat_treatment_alternatives(message) or not numeric_evidence(
+        value, evidence, message, allow_percentage=True
+    ):
         return False
     number = r"[0-9]+(?:\.[0-9]+)?"
     percent = r"(?:%|per\s*cent)"
@@ -294,11 +361,17 @@ def _mentions(description: str, text: str) -> bool:
 
 
 def _item_clauses(description: str, descriptions: list[str], message: str) -> list[str]:
+    selected = [
+        clause
+        for clause in item_clauses(message, description)
+        if _mentions(description, clause.text)
+    ]
+    if len(selected) != 1:
+        return []
     return [
         clause.text
-        for clause in clauses(message)
-        if _mentions(description, clause.text)
-        and not financial_negative_clause(clause.text)
+        for clause in selected
+        if not financial_negative_clause(clause.text)
         and not inherited_negative(message, clause, financial=True)
         and not any(
             other.casefold() != description.casefold() and _mentions(other, clause.text)
@@ -352,7 +425,7 @@ def _patch_line_items(notes: InvoiceNotes, proposal: ProposedNotes, message: str
             if change.field == "description":
                 if not _mentions(change.value, change.evidence):
                     raise ValueError("ungrounded line item description")
-            elif not numeric_evidence(
+            elif change.field == "quantity" and not numeric_evidence(
                 change.value,
                 change.evidence,
                 message,
@@ -363,6 +436,25 @@ def _patch_line_items(notes: InvoiceNotes, proposal: ProposedNotes, message: str
                 raise ValueError("ungrounded line item amount")
             values[change.field] = change.value
         updated = LineItem.model_validate(values)
+        for change in patch.changes:
+            if change.field == "unit_price" and not unit_price_evidence(
+                change.value,
+                change.evidence,
+                message,
+                quantity=updated.quantity,
+                within=context,
+                item_description=item.description,
+                allow_existing_quantity=True,
+            ):
+                raise ValueError("ungrounded line item price")
+        if seen & {"quantity", "unit_price"} and not line_total_matches(
+            updated.quantity,
+            updated.unit_price,
+            message,
+            within=context,
+            item_description=item.description,
+        ):
+            raise ValueError("inconsistent line item total")
         if money(updated.quantity) * money(updated.unit_price) > Decimal("1000000"):
             raise ValueError("line item amount outside supported range")
         items[patch.index] = updated
@@ -444,12 +536,12 @@ def apply_proposal(
                         role="quantity",
                         item_description=item.description,
                     )
-                    and numeric_evidence(
+                    and unit_price_evidence(
                         item.unit_price,
                         evidence,
                         message,
+                        quantity=item.quantity,
                         within=context,
-                        role="unit_price",
                         item_description=item.description,
                     )
                     for context in contexts

@@ -53,6 +53,40 @@ def clauses(message: str) -> list[Clause]:
     return result
 
 
+def item_clauses(message: str, description: str) -> list[Clause]:
+    """Item connectors retain their boundary even when quantity/currency is omitted."""
+    selector = re.compile(r"(?<!\w)" + re.escape(description) + r"(?!\w)", re.I)
+    names = list(selector.finditer(message))
+    result: list[Clause] = []
+    for clause in clauses(message):
+        start = clause.start
+        for connector in re.finditer(r"\b(?:plus|with)\b|&", clause.text, re.I):
+            left, right = clause.start + connector.start(), clause.start + connector.end()
+            if any(name.start() <= left and right <= name.end() for name in names):
+                continue
+            if not re.search(r"[0-9]", message[right : clause.end]):
+                continue
+            if message[start:left].strip():
+                result.append(Clause(start, left, message[start:left]))
+            start = right
+        if message[start : clause.end].strip():
+            result.append(Clause(start, clause.end, message[start : clause.end]))
+    # A work-description mention such as "supply valves" carries no competing
+    # numeric instruction. Count malformed numbers too so they cannot disappear.
+    numeric_assertions = {
+        clause.start
+        for clause in result
+        if selector.search(clause.text) and re.search(r"[0-9]", selector.sub("", clause.text))
+    }
+    if numeric_assertions:
+        return [
+            clause
+            for clause in result
+            if not selector.search(clause.text) or clause.start in numeric_assertions
+        ]
+    return result
+
+
 # ISO 4217 codes and common currency names are a currency vocabulary, not a list
 # of particular adversarial sentences. Only EUR/euro/€ (and Irish suffix e) are
 # supported. An adjacent unknown uppercase three-letter code also fails closed.
@@ -482,6 +516,94 @@ def _monetary(token: NumericToken, message: str) -> bool:
     )
 
 
+def _item_number_tokens(text: str, description: str | None) -> list[NumericToken]:
+    names = (
+        list(re.finditer(r"(?<!\w)" + re.escape(description) + r"(?!\w)", text, re.I))
+        if description is not None
+        else []
+    )
+    return [
+        token
+        for token in numeric_tokens(text)
+        if not any(name.start() <= token.start and token.end <= name.end() for name in names)
+    ]
+
+
+def _item_number_roles(
+    token: NumericToken,
+    text: str,
+    description: str | None,
+    tokens: list[NumericToken],
+) -> tuple[bool, bool, bool, bool]:
+    """Return quantity, unit-price, line-total and conflicting/partial-total roles."""
+    previous = max((other.end for other in tokens if other.end <= token.start), default=0)
+    following = min(
+        (other.start for other in tokens if other.start >= token.end), default=len(text)
+    )
+
+    prefix, suffix = text[: token.start], text[token.end :]
+    before, after = text[previous : token.start], text[token.end : following]
+    if description is not None:
+        before = re.sub(r"(?<!\w)" + re.escape(description) + r"(?!\w)", "", before, flags=re.I)
+    before = re.sub(r"(?:€|\b(?:EUR|euros?))\s*$", "", before, flags=re.I)
+    after = re.sub(r"^\s*(?:€|EUR\b|euros?\b|e\b)", "", after, flags=re.I)
+    labelled_quantity = bool(
+        re.search(r"\b(?:quantity|qty)\s*(?:(?:is|to|of|:|=)\s*)?$", prefix, re.I)
+    )
+    noun_quantity = bool(
+        description is not None
+        and re.match(r"\s+" + re.escape(description) + r"(?!\w)", suffix, re.I)
+    )
+    quantity_total = (
+        noun_quantity
+        and not _monetary(token, text)
+        and bool(re.search(r"\btotal\s+of\s*$", before, re.I))
+    )
+    total = not quantity_total and bool(
+        re.search(r"\b(?:total|subtotal|overall|deposit)\b", before, re.I)
+        or re.match(r"\s*(?:in\s+)?(?:total|subtotal|overall|deposit)\b", after, re.I)
+    )
+    partial = bool(re.search(r"\bdeposit\b", before + " " + after, re.I))
+    per_unit = r"(?:each|apiece|per[ -]+(?:item|unit))"
+    explicit_unit = bool(
+        re.search(
+            rf"\b(?:unit\s+(?:price|cost)|{per_unit})\s*(?:(?:is|to|of|:|=)\s*)?$", before, re.I
+        )
+        or re.match(rf"\s*{per_unit}\b", after, re.I)
+    )
+    price = bool(
+        _monetary(token, text)
+        or re.search(
+            r"(?:\b(?:at|price|cost|each|apiece)|@)\s*(?:(?:is|to|of|:|=)\s*)?$",
+            before,
+            re.I,
+        )
+        or explicit_unit
+    )
+    # Generic labels never override a line total. Combining explicit unit and
+    # total semantics on the same expression also requires clarification.
+    return (
+        not price and (labelled_quantity or noun_quantity),
+        price and not labelled_quantity and not total,
+        total,
+        partial or total and explicit_unit,
+    )
+
+
+def _item_numbers_supported(text: str, description: str | None, tokens: list[NumericToken]) -> bool:
+    names = (
+        list(re.finditer(r"(?<!\w)" + re.escape(description) + r"(?!\w)", text, re.I))
+        if description is not None
+        else []
+    )
+    # An invalid second amount must not disappear from role/ambiguity checks.
+    return all(
+        any(token.start <= raw.start() and raw.end() <= token.end for token in tokens)
+        or any(name.start() <= raw.start() and raw.end() <= name.end() for name in names)
+        for raw in re.finditer(r"[0-9]+(?:[.,][0-9]+)*", text)
+    )
+
+
 def role_matches(
     role: str | None,
     token: NumericToken,
@@ -491,34 +613,29 @@ def role_matches(
 ) -> bool:
     text = clause.text
     start, end = token.start - clause.start, token.end - clause.start
-    prefix, suffix = text[:start], text[end:]
     if role in {"quantity", "unit_price"}:
-        monetary = _monetary(token, message)
-        quantity = bool(re.search(r"\b(?:quantity|qty)\s*(?:(?:is|to|of|:|=)\s*)?$", prefix, re.I))
-        without_currency = re.sub(r"(?:€|\b(?:EUR|euros?))\s*$", "", prefix, flags=re.I)
-        price = bool(
-            monetary
-            and not re.search(r"\b(?:total|subtotal|overall|deposit)\b", text, re.I)
-            or re.search(
-                r"(?:\b(?:at|price|cost|each|apiece)|@)\s*(?:(?:is|to|of|:|=)\s*)?$",
-                without_currency,
-                re.I,
-            )
-            or re.match(r"\s*(?:each|apiece|per\s+(?:item|unit))\b", suffix, re.I)
+        tokens = _item_number_tokens(text, item_description)
+        # The supported item grammar has one quantity, unit price and total.
+        # Reject longer unresolved numeric lists before repeated role scans.
+        if len(tokens) > 3:
+            return False
+        quantity, price, _total, conflict = _item_number_roles(
+            NumericToken(start, end, token.value), text, item_description, tokens
         )
         if role == "unit_price":
-            # A line cannot silently select one of several possible prices.
+            # Bare at/price/cost values participate just like marked currency.
             candidates = [
-                candidate for candidate in numeric_tokens(text) if _monetary(candidate, text)
+                candidate
+                for candidate in tokens
+                if _item_number_roles(candidate, text, item_description, tokens)[1]
             ]
-            return price and not quantity and len(candidates) <= 1
-        # A quantity precedes its noun (3 valves) or follows a quantity label.
-        # Currency/price markers can never supply a quantity.
-        noun = (
-            item_description is not None
-            and re.match(r"\s+" + re.escape(item_description) + r"(?!\w)", suffix, re.I) is not None
-        )
-        return not price and (quantity or noun)
+            return (
+                price
+                and not conflict
+                and len(candidates) == 1
+                and _item_numbers_supported(text, item_description, tokens)
+            )
+        return quantity and not conflict
     if role in {"amount", "labour", "materials"}:
         # Quantity shorthand is not a stated scalar charge. Neither operand
         # supplies the amount, even when only the price has a currency marker.
@@ -581,7 +698,32 @@ def numeric_evidence(
     if not expression_context_safe(original, tokens):
         return False
     target = Decimal(value)
-    source_clauses = clauses(original)
+    source_clauses = (
+        item_clauses(original, item_description)
+        if role in {"quantity", "unit_price"} and item_description is not None
+        else clauses(original)
+    )
+    if role in {"quantity", "unit_price"}:
+        source_clauses = [
+            clause
+            for clause in source_clauses
+            if (
+                item_description is None
+                or re.search(
+                    r"(?<!\w)" + re.escape(item_description) + r"(?!\w)", clause.text, re.I
+                )
+                is not None
+            )
+        ]
+        if item_description is not None and len(source_clauses) != 1:
+            return False
+        source_clauses = [
+            clause
+            for clause in source_clauses
+            if len(_item_number_tokens(clause.text, item_description)) <= 3
+        ]
+        if not source_clauses:
+            return False
     return bool(spans) and all(
         any(
             token.value == target
@@ -591,6 +733,14 @@ def numeric_evidence(
             and any(
                 clause.start <= token.start
                 and token.end <= clause.end
+                and (
+                    role not in {"quantity", "unit_price"}
+                    or item_description is None
+                    or re.search(
+                        r"(?<!\w)" + re.escape(item_description) + r"(?!\w)", clause.text, re.I
+                    )
+                    is not None
+                )
                 and _complete_clause_safe(clause.text)
                 and not nonassertive_expression(original, clause, token.start, token.end)
                 and (allow_percentage or not financial_negative_clause(clause.text))
@@ -602,3 +752,102 @@ def numeric_evidence(
         )
         for start, end in spans
     )
+
+
+def line_total_matches(
+    quantity: str, unit_price: str, message: str, *, within: str, item_description: str
+) -> bool:
+    """A final item may not discard a stated total or silently round a quotient."""
+    tokens = _item_number_tokens(within, item_description)
+    if len(tokens) > 3:
+        return False
+    roles = [_item_number_roles(token, within, item_description, tokens) for token in tokens]
+    # "A total of 3 valves" describes a quantity, unlike a monetary line total.
+    labelled = re.sub(
+        r"\btotal\s+of(?=\s+[0-9][0-9,.]*\s+" + re.escape(item_description) + r"(?!\w))",
+        "",
+        within,
+        flags=re.I,
+    )
+    labelled = re.sub(
+        r"(?<!\w)" + re.escape(item_description) + r"(?!\w)", "", labelled, flags=re.I
+    )
+    if not re.search(r"\b(?:total|subtotal|overall|deposit)\b", labelled, re.I):
+        return True
+    if (
+        not expression_context_safe(message, numeric_tokens(message))
+        or not _complete_clause_safe(within)
+        or not _item_numbers_supported(within, item_description, tokens)
+        or financial_negative_clause(within)
+        or any(conflict for _quantity, _price, _total, conflict in roles)
+    ):
+        return False
+    totals = [token for token, role in zip(tokens, roles, strict=True) if role[2]]
+    quantities = [token for token, role in zip(tokens, roles, strict=True) if role[0]]
+    prices = [token for token, role in zip(tokens, roles, strict=True) if role[1]]
+    return (
+        len(totals) == 1
+        and len(prices) <= 1
+        and len(quantities) <= 1
+        and all(any(role[:3]) for role in roles)
+        and all(token.value == Decimal(quantity) for token in quantities)
+        and all(token.value == Decimal(unit_price) for token in prices)
+        and Decimal(quantity) * Decimal(unit_price) == totals[0].value
+    )
+
+
+def unit_price_evidence(
+    value: str,
+    evidence: str,
+    message: str,
+    *,
+    quantity: str,
+    within: str,
+    item_description: str,
+    allow_existing_quantity: bool = False,
+) -> bool:
+    """Accept a stated unit price or a model proposal proven by an exact product."""
+    if not line_total_matches(
+        quantity, value, message, within=within, item_description=item_description
+    ):
+        return False
+    if numeric_evidence(
+        value,
+        evidence,
+        message,
+        within=within,
+        role="unit_price",
+        item_description=item_description,
+    ):
+        return True
+    if not (
+        re.fullmatch(r"(?:0|[1-9][0-9]*)(?:\.[0-9]{1,2})?", value)
+        and Decimal(value) > 0
+        and (
+            allow_existing_quantity
+            or numeric_evidence(
+                quantity,
+                evidence,
+                message,
+                within=within,
+                role="quantity",
+                item_description=item_description,
+            )
+        )
+    ):
+        return False
+    for clause in item_clauses(message, item_description):
+        if clause.text != within or inherited_negative(message, clause, financial=True):
+            continue
+        tokens = _item_number_tokens(within, item_description)
+        for token in tokens:
+            if not _item_number_roles(token, within, item_description, tokens)[2]:
+                continue
+            start, end = clause.start + token.start, clause.start + token.end
+            if nonassertive_expression(message, clause, start, end):
+                return False
+            if any(
+                left <= start and end <= right for left, right in evidence_spans(message, evidence)
+            ):
+                return True
+    return False

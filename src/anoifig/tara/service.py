@@ -36,7 +36,8 @@ FALLBACK = (
     "I'm having trouble with that message. Your existing notes are saved. Please try again shortly."
 )
 INVALID = (
-    "I couldn't safely interpret those details. Please repeat the correction or amount clearly. "
+    "I couldn't safely interpret those details. "
+    "What correction, amount or VAT treatment should I record? "
     "Your existing notes are saved."
 )
 BUDGET = (
