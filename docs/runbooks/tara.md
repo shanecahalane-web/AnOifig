@@ -165,6 +165,16 @@ never blindly replayed; signed callbacks or audited operator reconciliation must
 resolve them. This orders application send attempts, not the mobile network's
 ultimate delivery. Twilio dispatch uncertainty must still follow [the messaging runbook](messaging.md).
 
+An invoice/grand total cannot establish one item's price. Restate the selected
+item's quantity and unit price, or an unambiguous line total; the application does
+not allocate invoice adjustments. A separate invoice total can be checked against
+the complete item sum only with no VAT and no overlapping scalar charges. VAT
+options listed on separate lines or after semicolons remain unresolved until the
+user selects one treatment. A clear numeric rate and inclusive/exclusive basis
+may be supplied together. Exemption, zero-rating and zero-percent evidence are
+not interchangeable. Invalid proposals preserve saved notes/version and produce
+one controlled clarification without a successful-update acknowledgement.
+
 Before live use: approve the provider account/model and current prices; measure
 extraction/personality accuracy on realistic Irish language and shorthand with
 approved data; review semantic hallucination and prompt injection risks; schedule

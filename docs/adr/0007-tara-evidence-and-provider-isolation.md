@@ -32,6 +32,15 @@ supported, unambiguous item total and a source quantity, or the final captured
 quantity in a version-bound correction. The backend verifies the proposed
 quantity times unit price exactly, including quantity-only corrections. It never
 divides or rounds a quotient; non-exact cents and conflicting evidence clarify.
+`ItemNumberRoles` retains an `AmountScope` of line item, invoice or partial charge.
+Both literal-price and exact-product paths use that classification. Invoice/bill,
+grand, all-items and unbound overall amounts cannot prove a line's unit price;
+explicitly item-bound wording such as `2 valves overall price €50.50` remains
+supported. Complete labels and the original message retain scope despite cropped
+model evidence. Separate invoice totals are checked against the complete resulting
+item list only when no VAT and no overlapping scalar charges make its sum
+unambiguous. Other allocations, tax-inclusive totals, discounts and adjustments
+require clarification; no difference is distributed between items.
 VAT validation examines the polarity and alternatives of the full assertion;
 short answers still require the application's matching pending clarification.
 Questions and rejected assertions do not establish financial or VAT facts.
@@ -45,6 +54,14 @@ these terms does not map one tax treatment onto another: an explicit zero-percen
 rate stays a rate, and exemption cannot supply one. Conflicting comma/and
 treatment assertions also require clarification; a
 numeric rate plus inclusive/exclusive basis remains a compatible pair of facts.
+Typed `VatAssertion` values retain treatment kind, numeric rate and whether the
+statement refers to this preparation or an explicitly different historical job.
+Current assertions are checked together across hard formatting boundaries;
+newlines, semicolons and intervening compatible facts cannot erase a conflict.
+Options and VAT-question headings do not make a listed rate affirmative. Repeated
+identical facts and affirmative rate-plus-basis updates remain valid, while a
+separately labelled discount percentage is not another VAT rate. Exempt, zero-rated,
+no-VAT and numeric zero-rate evidence remain distinct.
 Treatment-replacement prose
 such as "instead of" or "rather than" requires a clear single-treatment restatement
 under the existing conservative historical-expression boundary. Rejections use

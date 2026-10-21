@@ -9,6 +9,7 @@ import re
 import unicodedata
 from dataclasses import dataclass
 from decimal import Decimal
+from enum import StrEnum
 
 
 @dataclass(frozen=True)
@@ -23,6 +24,40 @@ class Clause:
     start: int
     end: int
     text: str
+
+
+class AmountScope(StrEnum):
+    LINE_ITEM = "line_item"
+    INVOICE = "invoice"
+    PARTIAL = "partial"
+
+
+@dataclass(frozen=True)
+class ItemNumberRoles:
+    quantity: bool
+    unit_price: bool
+    total_scope: AmountScope | None
+    conflict: bool
+
+
+def _invoice_scope(text: str, *, item_bound: bool = False) -> bool:
+    """Scope words apply to their complete label, even with cropped evidence."""
+    amount = r"(?:total|subtotal|amount|price|cost|value|balance|sum)"
+    document = (
+        r"(?:(?:the|this)\s+)?(?:(?:whole|entire|full)\s+)?(?:invoice|bill)(?:['’]s|[ -]wide)?"
+    )
+    return bool(
+        re.search(
+            rf"\b{document}\s+{amount}\b|\b{amount}\s+(?:(?:for|of|across)\s+)?{document}\b|"
+            rf"\bgrand[ -]+{amount}\b|\boverall[ -]+(?:total|subtotal)\b|"
+            rf"\b{amount}\s+(?:for|of|across)\s+(?:the\s+)?all\s+(?:items|lines)\b|"
+            rf"\ball\s+(?:items|lines)\s+{amount}\b",
+            text,
+            re.I,
+        )
+        or not item_bound
+        and re.search(rf"\boverall\s+{amount}\b", text, re.I)
+    )
 
 
 def evidence_spans(message: str, evidence: str) -> list[tuple[int, int]]:
@@ -534,8 +569,8 @@ def _item_number_roles(
     text: str,
     description: str | None,
     tokens: list[NumericToken],
-) -> tuple[bool, bool, bool, bool]:
-    """Return quantity, unit-price, line-total and conflicting/partial-total roles."""
+) -> ItemNumberRoles:
+    """Keep the monetary scope separate from quantity and unit-price roles."""
     previous = max((other.end for other in tokens if other.end <= token.start), default=0)
     following = min(
         (other.start for other in tokens if other.start >= token.end), default=len(text)
@@ -559,11 +594,22 @@ def _item_number_roles(
         and not _monetary(token, text)
         and bool(re.search(r"\btotal\s+of\s*$", before, re.I))
     )
+    invoice = _invoice_scope(before + " " + after, item_bound=description is not None)
     total = not quantity_total and bool(
         re.search(r"\b(?:total|subtotal|overall|deposit)\b", before, re.I)
         or re.match(r"\s*(?:in\s+)?(?:total|subtotal|overall|deposit)\b", after, re.I)
+        or invoice
     )
     partial = bool(re.search(r"\bdeposit\b", before + " " + after, re.I))
+    scope = None
+    if total:
+        scope = (
+            AmountScope.PARTIAL
+            if partial
+            else AmountScope.INVOICE
+            if invoice
+            else AmountScope.LINE_ITEM
+        )
     per_unit = r"(?:each|apiece|per[ -]+(?:item|unit))"
     explicit_unit = bool(
         re.search(
@@ -582,10 +628,10 @@ def _item_number_roles(
     )
     # Generic labels never override a line total. Combining explicit unit and
     # total semantics on the same expression also requires clarification.
-    return (
+    return ItemNumberRoles(
         not price and (labelled_quantity or noun_quantity),
         price and not labelled_quantity and not total,
-        total,
+        scope,
         partial or total and explicit_unit,
     )
 
@@ -619,7 +665,7 @@ def role_matches(
         # Reject longer unresolved numeric lists before repeated role scans.
         if len(tokens) > 3:
             return False
-        quantity, price, _total, conflict = _item_number_roles(
+        roles = _item_number_roles(
             NumericToken(start, end, token.value), text, item_description, tokens
         )
         if role == "unit_price":
@@ -627,15 +673,15 @@ def role_matches(
             candidates = [
                 candidate
                 for candidate in tokens
-                if _item_number_roles(candidate, text, item_description, tokens)[1]
+                if _item_number_roles(candidate, text, item_description, tokens).unit_price
             ]
             return (
-                price
-                and not conflict
+                roles.unit_price
+                and not roles.conflict
                 and len(candidates) == 1
                 and _item_numbers_supported(text, item_description, tokens)
             )
-        return quantity and not conflict
+        return roles.quantity and not roles.conflict
     if role in {"amount", "labour", "materials"}:
         # Quantity shorthand is not a stated scalar charge. Neither operand
         # supplies the amount, even when only the price has a currency marker.
@@ -772,27 +818,35 @@ def line_total_matches(
     labelled = re.sub(
         r"(?<!\w)" + re.escape(item_description) + r"(?!\w)", "", labelled, flags=re.I
     )
-    if not re.search(r"\b(?:total|subtotal|overall|deposit)\b", labelled, re.I):
+    if not re.search(
+        r"\b(?:total|subtotal|overall|deposit)\b", labelled, re.I
+    ) and not _invoice_scope(labelled, item_bound=True):
         return True
     if (
         not expression_context_safe(message, numeric_tokens(message))
         or not _complete_clause_safe(within)
         or not _item_numbers_supported(within, item_description, tokens)
         or financial_negative_clause(within)
-        or any(conflict for _quantity, _price, _total, conflict in roles)
+        or any(role.conflict for role in roles)
     ):
         return False
-    totals = [token for token, role in zip(tokens, roles, strict=True) if role[2]]
-    quantities = [token for token, role in zip(tokens, roles, strict=True) if role[0]]
-    prices = [token for token, role in zip(tokens, roles, strict=True) if role[1]]
+    totals = [
+        token
+        for token, role in zip(tokens, roles, strict=True)
+        if role.total_scope == AmountScope.LINE_ITEM
+    ]
+    quantities = [token for token, role in zip(tokens, roles, strict=True) if role.quantity]
+    prices = [token for token, role in zip(tokens, roles, strict=True) if role.unit_price]
     return (
-        len(totals) == 1
+        len(totals) <= 1
         and len(prices) <= 1
         and len(quantities) <= 1
-        and all(any(role[:3]) for role in roles)
+        and all(role.quantity or role.unit_price or role.total_scope is not None for role in roles)
         and all(token.value == Decimal(quantity) for token in quantities)
         and all(token.value == Decimal(unit_price) for token in prices)
-        and Decimal(quantity) * Decimal(unit_price) == totals[0].value
+        and (not totals or Decimal(quantity) * Decimal(unit_price) == totals[0].value)
+        # Invoice totals are checked against the complete result by the caller.
+        # They never prove a line price in unit_price_evidence.
     )
 
 
@@ -841,7 +895,10 @@ def unit_price_evidence(
             continue
         tokens = _item_number_tokens(within, item_description)
         for token in tokens:
-            if not _item_number_roles(token, within, item_description, tokens)[2]:
+            if (
+                _item_number_roles(token, within, item_description, tokens).total_scope
+                != AmountScope.LINE_ITEM
+            ):
                 continue
             start, end = clause.start + token.start, clause.start + token.end
             if nonassertive_expression(message, clause, start, end):
@@ -851,3 +908,44 @@ def unit_price_evidence(
             ):
                 return True
     return False
+
+
+def invoice_total_matches(
+    message: str, total: Decimal | None, *, item_descriptions: tuple[str, ...]
+) -> bool:
+    """Check an explicit invoice total only against a complete, unambiguous sum.
+
+    No tax, discount, deposit or allocation arithmetic is inferred. None means
+    the caller cannot establish the invoice sum from the supported notes.
+    """
+    totals: list[Decimal] = []
+    for clause in clauses(message):
+        bound = any(
+            re.search(r"(?<!\w)" + re.escape(name) + r"(?!\w)", clause.text, re.I)
+            for name in item_descriptions
+        )
+        if not _invoice_scope(clause.text, item_bound=bound):
+            continue
+        tokens = numeric_tokens(clause.text)
+        if (
+            not expression_context_safe(message, numeric_tokens(message))
+            or not _complete_clause_safe(clause.text)
+            or not _item_numbers_supported(clause.text, None, tokens)
+            or financial_negative_clause(clause.text)
+        ):
+            return False
+        scoped = [
+            token
+            for token in tokens
+            if _item_number_roles(token, clause.text, None, tokens).total_scope
+            == AmountScope.INVOICE
+        ]
+        if len(scoped) != 1:
+            return False
+        token = scoped[0]
+        if nonassertive_expression(
+            message, clause, clause.start + token.start, clause.start + token.end
+        ):
+            return False
+        totals.append(token.value)
+    return not totals or total is not None and all(value == total for value in totals)

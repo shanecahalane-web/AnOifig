@@ -24,8 +24,16 @@ INVOICE_TOTALS = [
     "overall total",
     "total for all items",
     "whole bill total",
+    "invoice amount",
+    "whole invoice price",
+    "price for the entire invoice",
+    "grand cost",
 ]
 VAT_CHOICES = [
+    "VAT options:\nVAT 23%",
+    "Choose VAT treatment:\nVAT 23%",
+    "Which VAT treatment applies?\nVAT 23%",
+    "VAT options:\nVAT 23%\nexcluding VAT",
     "VAT options:\nVAT exempt\nVAT 23%",
     "Choose VAT treatment:\nVAT exempt\nVAT 23%",
     "Either:\nVAT exempt\nVAT 23%",
@@ -84,6 +92,16 @@ def test_invoice_total_is_not_a_line_product(label):
         item_description="valves",
         allow_existing_quantity=True,
     )
+    # Literal matching must not launder the invoice amount into a unit price.
+    assert not unit_price_evidence(
+        "90",
+        message,
+        message,
+        quantity="3",
+        within=context,
+        item_description="valves",
+        allow_existing_quantity=True,
+    )
 
 
 @pytest.mark.parametrize("label", INVOICE_TOTALS)
@@ -122,6 +140,8 @@ def test_initial_items_cannot_derive_a_price_from_an_invoice_total(label):
         "; total for all items €90",
         "; invoice total €95; invoice total €90",
         "; invoice total €95.001",
+        "; overall price €90",
+        "\noverall cost €90",
     ],
 )
 def test_separate_or_cropped_invoice_totals_cannot_be_discarded(suffix):
@@ -169,6 +189,13 @@ def test_stated_unit_price_and_invoice_total_use_the_complete_item_list(total, a
             **original.model_dump(),
             "line_items": [{**ITEMS[0], "unit_price": "30"}, ITEMS[1]],
         }
+
+
+def test_invoice_preparation_verb_does_not_change_an_explicit_items_total_scope():
+    message = "Invoice John for 3 valves line total of €75"
+    p = proposed(line_items=[ITEMS[0]], line_items_evidence=message)
+    original = InvoiceNotes(vat_basis="no_vat")
+    assert apply_proposal(original, p, message).line_items[0].model_dump() == ITEMS[0]
 
 
 @pytest.mark.parametrize("message", VAT_CHOICES)
@@ -229,6 +256,7 @@ def test_conflicts_are_not_lost_via_an_intervening_compatible_assertion(message)
         ("Use VAT 23%. Choose repairs or replacement.", "vat_rate", "23"),
         ("VAT exempt.\nRepairs or installation are fine.", "vat_basis", "no_vat"),
         ("Use VAT 23%\nVAT 23%", "vat_rate", "23"),
+        ("Use VAT 23%; discount 10%.", "vat_rate", "23"),
     ],
 )
 def test_compatible_affirmative_and_unrelated_statements_remain_supported(message, field, value):

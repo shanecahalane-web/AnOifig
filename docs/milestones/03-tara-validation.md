@@ -313,10 +313,113 @@ treatment comparisons can still require a clear restatement. The new exact-produ
 exception does not enable general arithmetic or tax calculations. Production gates
 remain separate.
 
+## Invoice scope and formatted VAT choices, 21 October 2026
+
+The final review of `29a19d26e63ecf2f9a99d360a1c7b8a209c4c59b` reproduced
+two further P2 preparation-note defects. These corrections retain the existing
+PR branch, modular-monolith boundaries, database schema/grants and provider
+lifecycle. No merge, deployment, live provider call, invoice issuance or marketing
+change is included.
+
+| Input and proposed interpretation | Reviewed behaviour | Corrected behaviour |
+| --- | --- | --- |
+| Saved valves `3 × 25`, elbows `2 × 10`; `Change valves so the overall invoice total is €90.`; proposed valves price `30` | Saves an invoice item sum of `110`, advances version and acknowledges success | Rejects; complete notes and version preserved; one controlled clarification, no `notes_merged` |
+| Initial `3 valves for an overall invoice total of €90 and 2 elbows at €10.`, proposed prices `30` and `10` | Saves sum `110` | Rejects without saving items |
+| Saved VAT `exclusive / 13.5`; three lines `VAT options:` / `VAT exempt` / `VAT 23%`; proposed rate `23` | Saves rate `23`, advances version and acknowledges success | Preserves both VAT fields, all items and version; one controlled clarification |
+| Numeric rate versus no-VAT, exemption or zero-rating across newline/semicolon, including an intervening basis assertion | Formatting can hide the unresolved treatment | Current assertions retain their treatment kind and scope across formatting; both rate and basis proposals reject conflicts |
+| `Use VAT 23%` followed by `excluding VAT` | Supported | Still supported; repeated equal rates, unrelated prose/discount percentages and explicitly historical other-job statements retain controls |
+
+The amount boundary now retains an explicit typed scope: line item, invoice or
+partial charge. Invoice/bill, grand and all-items labels apply to their complete
+expression. Unbound overall amounts are invoice-scoped. As confirmed in the
+implementation request, explicitly item-bound wording such as `2 valves overall
+price €50.50` remains a valid line total. Literal numeric matching and derived
+prices share the classification; only a line total may prove a selected item's
+exact product. No invoice total can supply a unit price or allocate a difference.
+
+A separately stated invoice total is checked against the complete resulting item
+list when the notes explicitly say no VAT and contain no overlapping scalar
+amount/labour/material charges. This accepts a stated `3 × 30 + 2 × 10` with an
+invoice total of `110` and rejects `90`; it never distributes a discount, rounds
+a quotient or calculates tax. Ambiguous sums require a clearer restatement.
+
+VAT assertions retain a typed treatment kind, numeric rate and current versus
+explicit historical-document scope. All current facts participate in conflict
+checks, including nonadjacent statements and options/question headings. Compatible
+rate-plus-pricing-basis facts remain distinct; exemption, zero-rating, no-VAT and
+numeric zero-percent evidence are not mapped to each other. Prompt v5 describes
+the same supported boundary. The existing application-owned clarification reply
+and durable rejection path are retained.
+
+### Before/after regression evidence
+
+The first **135** regressions were written and run before source corrections:
+**114 failed / 21 passed**. Commit `895ee26` records those tests on the reviewed
+implementation. Additional probes then covered generic invoice amount/price
+labels, separated/cropped scopes, ordinary `Invoice John...` introductions,
+compatible percentages and question headings, without weakening an existing
+assertion.
+
+The final two new modules contain **179 cases**: **118** unit validation/proposal
+cases in `test_tara_scope_boundaries.py`, and **61** signed-ingress/restricted-role
+PostgreSQL cases in `test_tara_scope_persistence.py`. A fresh untouched archive of
+`29a19d2` received exactly those final files. All changed implementation files were
+compared byte-for-byte to their Git objects, and the imported schema source path
+was asserted before pytest. Using the same final locked environment and a separate
+disposable `scope_before_test` database, it produced **136 failures / 43 passes in
+56.35s**. These include genuine unsafe acceptance, positive supported-boundary
+cases and clarification behaviour; they are not 136 distinct defects.
+
+The existing **1,599** cases remain unchanged, giving **1,778 tests**. Persistence
+cases compare complete notes, exact quantities/prices/VAT, unchanged rejection
+version, one controlled persisted reply, no success acknowledgement and safe run
+action/error metadata. Two cases also prove another tenant's full state remains
+unchanged and raw restricted-role reads/writes cannot reach the first tenant.
+
+| Validation | Result |
+| --- | --- |
+| Complete Python 3.13.5/PostgreSQL 17 suite with separate owner/runtime roles | **1,778 passed**, no skips, 282.28s |
+| Ruff lint / formatting | Passed; 104 Python files formatted |
+| Strict Mypy / Bandit | Passed; 39 source files, no security-pattern findings |
+| Frozen sync / locked dependency audit | Passed; 72 audited packages, no known vulnerabilities/adverse statuses |
+| Fresh runtime and development Docker builds | Passed; runtime UID 10001; changed source and lock hashes match |
+| Docker signed-ingress/restricted-role persistence cases | **61 passed**, 50.59s, in the development image against a separate disposable database |
+| Runtime Docker smoke | Actual API live/ready HTTP 200, both reported interpretations reject with notes unchanged, packaged isolated launcher rejects invalid input privately |
+| Independent prior-review probes outside the repository | **37 passed**, 21.32s; the previous nine failures for these two findings now reject correctly and 28 controls remain valid |
+| GitHub Actions | Exact published-head run/result linked in PR #4 after upload |
+
+The runtime image is `sha256:725155f1bb74d6774b772963001926fd6cff2298f900a0da7f9a21b89b0fee13`.
+Docker builds used the approved combined CA bundle as a BuildKit secret with TLS
+verification intact. Signed tests replace only provider/key transports and use
+the real application ingress, signatures, worker, outbox, transactions and RLS.
+
+The current locked audit surfaced `GHSA-6q48-6c7w-9gw2` (also
+`PYSEC-2026-4320`) for certifi's emSign roots. The only dependency change is a
+locked patch from `2026.7.22` to `2026.10.19`; no application dependency constraint
+or other locked package changed. All final validation uses the patched lock.
+
+Reproduce the focused cases with dedicated disposable owner/runtime connections:
+
+```sh
+uv sync --frozen
+uv run --frozen pytest -ra tests/unit/test_tara_scope_boundaries.py \
+  tests/integration/test_tara_scope_persistence.py
+```
+
+For the before run, archive `29a19d2`, copy only those two test files into their
+matching paths, select the archived `src` with `PYTHONPATH`, assert the imported
+`anoifig.tara.schemas.__file__`, and run against a separate disposable database.
+No reviewed source file or original assertion is changed for the comparison.
+
+Both reported P2 interpretations are rejected within the supported grammar and
+the corrections are prepared for independent re-verification. This is not a
+staging or production approval. The limitations below remain applicable.
+
 ## Operational changes and limitations
 
-No dependency, database migration, grant or RLS change is introduced by these
-corrections. Migration 0006 and its rollback behaviour remain unchanged. Never
+No database migration, grant or RLS change is introduced by these corrections.
+The latest correction includes only the certifi dependency patch described above.
+Migration 0006 and its rollback behaviour remain unchanged. Never
 downgrade 0005 to reset usage: it deletes Tara notes/audit/budgets. Prefer forward
 fixes; pause workers/API and verify grants for separately approved migrations.
 

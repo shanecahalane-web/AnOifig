@@ -3,6 +3,7 @@
 import json
 import re
 import unicodedata
+from dataclasses import dataclass
 from decimal import Decimal
 from enum import StrEnum
 from typing import Annotated, Literal
@@ -14,6 +15,7 @@ from anoifig.tara.financial import (
     expression_context_safe,
     financial_negative_clause,
     inherited_negative,
+    invoice_total_matches,
     item_clauses,
     line_total_matches,
     negative_clause,
@@ -179,6 +181,39 @@ class Decision(StrictModel):
 PendingClarification = Literal["vat_basis", "vat_rate"]
 
 
+class VatTreatmentKind(StrEnum):
+    RATE = "rate"
+    EXEMPT = "exempt"
+    ZERO_RATED = "zero_rated"
+    NO_VAT = "no_vat"
+    INCLUSIVE = "inclusive"
+    EXCLUSIVE = "exclusive"
+
+
+@dataclass(frozen=True)
+class VatAssertion:
+    start: int
+    end: int
+    kind: VatTreatmentKind
+    rate: Decimal | None
+    current: bool
+
+
+def _current_vat_context(message: str, start: int, *, bare_rate: bool = False) -> bool:
+    context = re.split(r"[;\n!?]|\.(?=\s|$)", message[:start])[-1]
+    # An explicitly different historical document is not this preparation's tax
+    # instruction. Unqualified statements stay in the current scope regardless
+    # of commas, conjunctions, newlines or semicolons.
+    if re.search(r"\b(?:old|previous|earlier|last)\s+(?:job|invoice|bill)\b", context, re.I):
+        return False
+    return not (
+        bare_rate
+        and re.search(
+            r"\b(?:discount|deposit|retention|interest|margin|markup|tip)\b", context, re.I
+        )
+    )
+
+
 def _vat_treatment_alternatives(message: str) -> bool:
     """A textual treatment can be the other side of a numeric VAT choice.
 
@@ -188,43 +223,70 @@ def _vat_treatment_alternatives(message: str) -> bool:
     """
     number = r"[0-9]+(?:\.[0-9]+)?"
     percent = r"(?:%|per\s*cent\b|percent\b)"
-    treatments = list(
-        re.finditer(
-            rf"\bvat(?:\s+rate)?\s*(?:(?:is|at|of)\s+|:\s*)?{number}(?:\s*{percent})?"
-            rf"|(?<![\w.]){number}\s*{percent}"
-            r"|\b(?:vat\s+)?exempt(?:ion)?\b|\bzero[\s\u2010-\u2015-]+rated\b|\bno\s+vat\b"
-            r"|\bnot\s+(?:vat\s+registered|registered\s+(?:for\s+)?vat)\b"
-            r"|\b(?:(?:including|inclusive(?: of)?|incl\.?|inc\.?)\s+vat|vat included)\b"
-            r"|\b(?:before|excluding|exclusive(?: of)?|excl\.?|ex|plus)\s+vat\b",
-            message,
-            re.I,
+    treatments: list[VatAssertion] = []
+    for match in re.finditer(
+        rf"(?P<rate>\bvat(?:\s+rate)?\s*(?:(?:is|at|of)\s+|:\s*)?{number}(?:\s*{percent})?"
+        rf"|(?<![\w.]){number}\s*{percent})"
+        r"|(?P<exempt>\b(?:vat\s+)?exempt(?:ion)?\b)"
+        r"|(?P<zero_rated>\bzero[\s\u2010-\u2015-]+rated\b)"
+        r"|(?P<no_vat>\bno\s+vat\b|\bnot\s+(?:vat\s+registered|registered\s+(?:for\s+)?vat)\b)"
+        r"|(?P<inclusive>\b(?:(?:including|inclusive(?: of)?|incl\.?|inc\.?)\s+vat|vat included)\b)"
+        r"|(?P<exclusive>\b(?:before|excluding|exclusive(?: of)?|excl\.?|ex|plus)\s+vat\b)",
+        message,
+        re.I,
+    ):
+        if match.lastgroup is None:
+            return True
+        kind = VatTreatmentKind(match.lastgroup)
+        numeric = re.search(number, match.group()) if kind == VatTreatmentKind.RATE else None
+        treatments.append(
+            VatAssertion(
+                match.start(),
+                match.end(),
+                kind,
+                Decimal(numeric.group()) if numeric else None,
+                _current_vat_context(
+                    message,
+                    match.start(),
+                    bare_rate=kind == VatTreatmentKind.RATE
+                    and re.search(r"\bvat\b", match.group(), re.I) is None,
+                ),
+            )
         )
-    )
+    current = [assertion for assertion in treatments if assertion.current]
+    facts = {(assertion.kind, assertion.rate) for assertion in current}
+    rates = {value for kind, value in facts if kind == VatTreatmentKind.RATE}
+    bases = {
+        kind
+        for kind, _ in facts
+        if kind in {VatTreatmentKind.INCLUSIVE, VatTreatmentKind.EXCLUSIVE}
+    }
+    treatments_without_rate = {kind for kind, _ in facts} - {
+        VatTreatmentKind.RATE,
+        VatTreatmentKind.INCLUSIVE,
+        VatTreatmentKind.EXCLUSIVE,
+    }
+    if len(rates) > 1 or len(bases) > 1 or treatments_without_rate and len(facts) > 1:
+        return True
+    heading = message[: current[0].start] if current else ""
+    if re.search(
+        r"(?:^|[;\n.!?])\s*(?:(?:vat\s+)?(?:options?|choices?|alternatives?)(?:\s+for\s+vat)?|"
+        r"(?:choose|select)(?:\s+(?:one|vat(?:\s+(?:treatment|rate))?))?|either)\s*:|"
+        r"(?:^|[;\n.!?])\s*(?:what|which|should|could|would|is|are)\b[^;\n.!?]*\bvat\b"
+        r"[^;\n.!?]*[?:]\s*$",
+        heading,
+        re.I,
+    ):
+        return True
     alternative = (
         r"\bor\b|\bversus\b|\bvs\.?\b|/|\balternatively\b|"
         r"\binstead\s+of\b|\brather\s+than\b"
     )
     boundary = r"[;\n!?]|\.(?=\s|$)"
 
-    def treatment_kind(assertion: str) -> str:
-        if re.search(r"\bzero[\s\u2010-\u2015-]+rated\b", assertion, re.I):
-            return "zero_rated"
-        if re.search(r"\bexempt(?:ion)?\b", assertion, re.I):
-            return "exempt"
-        if re.search(r"\b(?:no|not)\b", assertion, re.I):
-            return "no_vat"
-        if re.search(r"[0-9]", assertion):
-            return "rate"
-        return "basis"
-
     for left, right in zip(treatments, treatments[1:], strict=False):
-        bridge = message[left.end() : right.start()]
+        bridge = message[left.end : right.start]
         parts = re.split(boundary, bridge)
-        kinds = {treatment_kind(left.group()), treatment_kind(right.group())}
-        # Comma/and assertions can conflict without an explicit "or". A rate
-        # plus inclusive/exclusive basis remains a compatible pair of facts.
-        if len(parts) == 1 and len(kinds) > 1 and "basis" not in kinds:
-            return True
         # Connectors on either side of formatting punctuation retain the choice.
         # An unrelated earlier "or" cannot cross an independent sentence.
         if re.search(alternative, bridge, re.I) and (
@@ -235,7 +297,7 @@ def _vat_treatment_alternatives(message: str) -> bool:
         ):
             return True
         if len(parts) == 1 and re.search(r"\band\b|,", bridge, re.I):
-            head = re.split(boundary, message[: left.start()])[-1]
+            head = re.split(boundary, message[: left.start])[-1]
             if re.search(r"\b(?:choose|choice|either|between)\b", head, re.I):
                 return True
     return False
@@ -266,6 +328,8 @@ def vat_evidence(
     supported: set[str] = set()
     for basis, pattern in patterns.items():
         for match in re.finditer(pattern, evidence, re.I):
+            if not _current_vat_context(evidence, match.start()):
+                continue
             clause = next(
                 (
                     part
@@ -314,7 +378,7 @@ def _vat_rate_evidence(
     patterns = (
         rf"\bvat(?:\s+rate)?\s*(?:(?:is|at|of)\s+|:\s*)?(?P<rate>{number})\s*{percent}",
         rf"\bvat\s+rate\s*(?:(?:is|at|of)\s+|:\s*)?(?P<rate>{number})(?![\w.]|,[0-9])",
-        rf"(?<![\w.,])(?P<rate>{number})\s*{percent}\s*(?:for\s+)?vat\b",
+        rf"(?<![\w.,])(?P<rate>{number})\s*{percent}[^\S\n]*(?:for[^\S\n]+)?vat\b",
     )
     spans = _evidence_spans(message, evidence)
     rates: set[Decimal] = set()
@@ -322,6 +386,8 @@ def _vat_rate_evidence(
     for pattern in patterns:
         for match in re.finditer(pattern, message, re.I):
             start, end = match.span("rate")
+            if not _current_vat_context(message, match.start()):
+                continue
             clause = next(
                 (
                     part
@@ -554,7 +620,27 @@ def apply_proposal(
         values["line_items"] = [
             item.model_dump() for item in _patch_line_items(notes, proposal, message)
         ]
-    return InvoiceNotes.model_validate(values)
+    updated = InvoiceNotes.model_validate(values)
+    if proposal.line_items is not None or any(
+        change.field in {"quantity", "unit_price"}
+        for patch in proposal.line_item_patches
+        for change in patch.changes
+    ):
+        # A stated unit price may coexist with an invoice total, but that total
+        # cannot be used as one line's product or silently allocate a difference.
+        total = None
+        if updated.vat_basis == "no_vat" and all(
+            value is None for value in (updated.amount, updated.labour, updated.materials)
+        ):
+            total = sum(
+                (money(item.quantity) * money(item.unit_price) for item in updated.line_items),
+                Decimal(0),
+            )
+        if not invoice_total_matches(
+            message, total, item_descriptions=tuple(item.description for item in updated.line_items)
+        ):
+            raise ValueError("inconsistent or ambiguous invoice total")
+    return updated
 
 
 def render_notes(notes: InvoiceNotes, *, correction: bool = False) -> str:

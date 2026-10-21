@@ -10,6 +10,8 @@ from test_tara import messaging_client as _messaging_client
 from test_tara_merge_blockers import assert_rejected, patch
 from test_tara_review_corrections import change, proposal, reply_body
 
+from anoifig.tara.service import INVALID
+
 messaging_client = _messaging_client
 pytestmark = pytest.mark.integration
 ITEMS = [
@@ -25,8 +27,16 @@ TOTAL_LABELS = [
     "overall total",
     "total for all items",
     "whole bill total",
+    "invoice amount",
+    "whole invoice price",
+    "price for the entire invoice",
+    "grand cost",
 ]
 VAT_CHOICES = [
+    "VAT options:\nVAT 23%",
+    "Choose VAT treatment:\nVAT 23%",
+    "Which VAT treatment applies?\nVAT 23%",
+    "VAT options:\nVAT 23%\nexcluding VAT",
     "VAT options:\nVAT exempt\nVAT 23%",
     "Choose VAT treatment:\nVAT exempt\nVAT 23%",
     "Either:\nVAT exempt\nVAT 23%",
@@ -244,7 +254,15 @@ def test_scope_rejection_preserves_the_other_tenant(
         == before["notes"]
     )
     assert next(row for row in current if row["tenant_id"] == seed.businesses["b"]) == other
-    assert "Updated that." not in reply_body(database, identifier)
+    assert (
+        next(row for row in current if row["tenant_id"] == seed.businesses["a"])["version"]
+        == before["version"]
+    )
+    assert reply_body(database, identifier) == INVALID
+    assert len(rows(database, "messages", "WHERE reply_to_id = :id", {"id": identifier})) == 1
+    run = rows(database, "tara_runs", "WHERE message_id = :id", {"id": identifier})[0]
+    assert run["action"] is None
+    assert run["error_code"] == "invalid_model_response"
     with database.runtime.begin() as connection:
         set_context(connection, seed, subject="owner-b", tenant="b")
         assert (
