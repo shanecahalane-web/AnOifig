@@ -594,7 +594,12 @@ def _item_number_roles(
         and not _monetary(token, text)
         and bool(re.search(r"\btotal\s+of\s*$", before, re.I))
     )
-    invoice = _invoice_scope(before + " " + after, item_bound=description is not None)
+    # A label between amounts belongs to the following amount. Only a final
+    # postfix label can establish this token's scope; do not steal the next
+    # invoice label from an explicitly stated unit price.
+    invoice = _invoice_scope(before, item_bound=description is not None) or (
+        following == len(text) and _invoice_scope(after, item_bound=description is not None)
+    )
     total = not quantity_total and bool(
         re.search(r"\b(?:total|subtotal|overall|deposit)\b", before, re.I)
         or re.match(r"\s*(?:in\s+)?(?:total|subtotal|overall|deposit)\b", after, re.I)

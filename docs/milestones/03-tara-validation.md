@@ -360,17 +360,17 @@ labels, separated/cropped scopes, ordinary `Invoice John...` introductions,
 compatible percentages and question headings, without weakening an existing
 assertion.
 
-The final two new modules contain **179 cases**: **118** unit validation/proposal
-cases in `test_tara_scope_boundaries.py`, and **61** signed-ingress/restricted-role
+The final two new modules contain **183 cases**: **120** unit validation/proposal
+cases in `test_tara_scope_boundaries.py`, and **63** signed-ingress/restricted-role
 PostgreSQL cases in `test_tara_scope_persistence.py`. A fresh untouched archive of
 `29a19d2` received exactly those final files. All changed implementation files were
 compared byte-for-byte to their Git objects, and the imported schema source path
 was asserted before pytest. Using the same final locked environment and a separate
-disposable `scope_before_test` database, it produced **136 failures / 43 passes in
-56.35s**. These include genuine unsafe acceptance, positive supported-boundary
+disposable `scope_before_test` database, it produced **136 failures / 47 passes in
+61.23s**. These include genuine unsafe acceptance, positive supported-boundary
 cases and clarification behaviour; they are not 136 distinct defects.
 
-The existing **1,599** cases remain unchanged, giving **1,778 tests**. Persistence
+The existing **1,599** cases remain unchanged, giving **1,782 tests**. Persistence
 cases compare complete notes, exact quantities/prices/VAT, unchanged rejection
 version, one controlled persisted reply, no success acknowledgement and safe run
 action/error metadata. Two cases also prove another tenant's full state remains
@@ -378,17 +378,17 @@ unchanged and raw restricted-role reads/writes cannot reach the first tenant.
 
 | Validation | Result |
 | --- | --- |
-| Complete Python 3.13.5/PostgreSQL 17 suite with separate owner/runtime roles | **1,778 passed**, no skips, 282.28s |
+| Complete Python 3.13.5/PostgreSQL 17 suite with separate owner/runtime roles | **1,782 passed**, no skips, 276.88s |
 | Ruff lint / formatting | Passed; 104 Python files formatted |
 | Strict Mypy / Bandit | Passed; 39 source files, no security-pattern findings |
 | Frozen sync / locked dependency audit | Passed; 72 audited packages, no known vulnerabilities/adverse statuses |
 | Fresh runtime and development Docker builds | Passed; runtime UID 10001; changed source and lock hashes match |
-| Docker signed-ingress/restricted-role persistence cases | **61 passed**, 50.59s, in the development image against a separate disposable database |
+| Docker signed-ingress/restricted-role persistence cases | **63 passed**, 56.52s, in the development image against a separate disposable database |
 | Runtime Docker smoke | Actual API live/ready HTTP 200, both reported interpretations reject with notes unchanged, packaged isolated launcher rejects invalid input privately |
-| Independent prior-review probes outside the repository | **37 passed**, 21.32s; the previous nine failures for these two findings now reject correctly and 28 controls remain valid |
+| Independent prior-review probes outside the repository | **37 passed**, 20.69s; the previous nine failures for these two findings now reject correctly and 28 controls remain valid |
 | GitHub Actions | Exact published-head run/result linked in PR #4 after upload |
 
-The runtime image is `sha256:725155f1bb74d6774b772963001926fd6cff2298f900a0da7f9a21b89b0fee13`.
+The runtime image is `sha256:a66c14559f2e86560604e9f42caa6290bb79b7f6654a186e299d2a4fc9a459a2`.
 Docker builds used the approved combined CA bundle as a BuildKit secret with TLS
 verification intact. Signed tests replace only provider/key transports and use
 the real application ingress, signatures, worker, outbox, transactions and RLS.
@@ -397,6 +397,19 @@ The current locked audit surfaced `GHSA-6q48-6c7w-9gw2` (also
 `PYSEC-2026-4320`) for certifi's emSign roots. The only dependency change is a
 locked patch from `2026.7.22` to `2026.10.19`; no application dependency constraint
 or other locked package changed. All final validation uses the patched lock.
+
+A final compatibility probe caught an invoice label between two amounts attaching
+to the preceding explicit unit price. Numeric boundaries now keep that label with
+the following total. Four additional unit/persistence controls preserve clearly
+stated units plus an invoice total in the same clause, including the previously
+supported `3 valves at €25 each invoice total €75` case. They fail before this
+follow-up correction and pass after it; no original assertion was changed.
+
+GitHub run 19 at `4d95cb9` passed the financial cases but failed the unchanged
+queue-drain test's final send-count assertion: 202 replies existed and 107 sends
+had completed after its fixed polling loop. Queue code and all its assertions
+remain unchanged. The exact final-head CI outcome, including any retry, is recorded
+in PR #4; this earlier result is retained rather than presented as an all-green run.
 
 Reproduce the focused cases with dedicated disposable owner/runtime connections:
 

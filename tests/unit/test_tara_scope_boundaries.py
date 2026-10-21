@@ -198,6 +198,22 @@ def test_invoice_preparation_verb_does_not_change_an_explicit_items_total_scope(
     assert apply_proposal(original, p, message).line_items[0].model_dump() == ITEMS[0]
 
 
+@pytest.mark.parametrize(
+    "message",
+    [
+        "3 valves at €25 each invoice total €75",
+        "3 valves unit price €25 grand total €75",
+    ],
+)
+def test_a_following_invoice_label_cannot_change_a_stated_units_role(message):
+    p = proposed(line_items=[ITEMS[0]], line_items_evidence=message)
+    original = InvoiceNotes(vat_basis="no_vat")
+    assert apply_proposal(original, p, message).model_dump() == {
+        **original.model_dump(),
+        "line_items": [ITEMS[0]],
+    }
+
+
 @pytest.mark.parametrize("message", VAT_CHOICES)
 @pytest.mark.parametrize("cropped", [False, True])
 def test_formatted_vat_rate_choices_preserve_both_fields(message, cropped):

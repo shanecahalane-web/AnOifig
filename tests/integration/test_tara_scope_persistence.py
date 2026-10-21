@@ -133,6 +133,37 @@ def test_full_invoice_consistency_does_not_allocate_or_round(
         assert_rejected(database, identifier, before)
 
 
+@pytest.mark.parametrize(
+    "message",
+    [
+        "3 valves at €25 each invoice total €75",
+        "3 valves unit price €25 grand total €75",
+    ],
+)
+def test_stated_units_and_following_invoice_totals_remain_supported(
+    message,
+    messaging_client,
+    database,
+    seed,
+    bearer,
+):
+    worker, ai = establish(messaging_client, database, seed, bearer, items=False)
+    before = rows(database, "tara_states")[0]
+    ai.results.append(
+        proposal(
+            [], line_items=[ITEMS[0]], line_items_evidence=message, intent="invoice_preparation"
+        )
+    )
+    identifier = accept(messaging_client, message)
+    assert worker.process_delivery(identifier)
+    assert notes(database) == {**before["notes"], "line_items": [ITEMS[0]]}
+    assert rows(database, "tara_states")[0]["version"] == before["version"] + 1
+    assert "information is saved for preparation" in reply_body(database, identifier)
+    run = rows(database, "tara_runs", "WHERE message_id = :id", {"id": identifier})[0]
+    assert run["action"] == "notes_merged"
+    assert run["error_code"] is None
+
+
 @pytest.mark.parametrize("message", VAT_CHOICES)
 @pytest.mark.parametrize("cropped", [False, True])
 def test_formatted_vat_options_cannot_update_saved_rate(
