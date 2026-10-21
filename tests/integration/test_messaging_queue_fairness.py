@@ -296,7 +296,12 @@ def test_concurrent_workers_recover_expiry_and_bypass_locked_rows_without_duplic
             == 1
         )
     expire(database, locked_sources)
-    for _ in range(12):
+    # This final phase checks eventual draining, not a fixed polling-turn bound.
+    # Fast CI workers can exhaust 12 rounds while ordered sends are deferred;
+    # retain the real scheduler, cooldowns and every completion/dedup assertion.
+    # The four locked-row fairness rounds above remain unchanged.
+    drain_deadline = perf_counter() + 30
+    while perf_counter() < drain_deadline:
         # Source order can require another polling turn after a predecessor
         # settles. Advance the test's cooldowns after both workers have joined;
         # do not alter source retry times, receipts or external delivery state.

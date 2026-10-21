@@ -331,7 +331,9 @@ change is included.
 
 The amount boundary now retains an explicit typed scope: line item, invoice or
 partial charge. Invoice/bill, grand and all-items labels apply to their complete
-expression. Unbound overall amounts are invoice-scoped. As confirmed in the
+expression, including net/final/gross document totals, totals due for an invoice,
+both-items totals and an explicit whole invoice without a total noun. Unbound
+overall amounts are invoice-scoped. As confirmed in the
 implementation request, explicitly item-bound wording such as `2 valves overall
 price €50.50` remains a valid line total. Literal numeric matching and derived
 prices share the classification; only a line total may prove a selected item's
@@ -345,7 +347,9 @@ a quotient or calculates tax. Ambiguous sums require a clearer restatement.
 
 VAT assertions retain a typed treatment kind, numeric rate and current versus
 explicit historical-document scope. All current facts participate in conflict
-checks, including nonadjacent statements and options/question headings. Compatible
+checks, including nonadjacent statements and options/question headings before any
+current assertion. An earlier compatible rate cannot hide a later question or
+options heading. Compatible
 rate-plus-pricing-basis facts remain distinct; exemption, zero-rating, no-VAT and
 numeric zero-percent evidence are not mapped to each other. Prompt v5 describes
 the same supported boundary. The existing application-owned clarification reply
@@ -360,17 +364,19 @@ labels, separated/cropped scopes, ordinary `Invoice John...` introductions,
 compatible percentages and question headings, without weakening an existing
 assertion.
 
-The final two new modules contain **183 cases**: **120** unit validation/proposal
-cases in `test_tara_scope_boundaries.py`, and **63** signed-ingress/restricted-role
+The final two new modules contain **273 cases**: **173** unit validation/proposal
+cases in `test_tara_scope_boundaries.py`, and **100** signed-ingress/restricted-role
 PostgreSQL cases in `test_tara_scope_persistence.py`. A fresh untouched archive of
 `29a19d2` received exactly those final files. All changed implementation files were
 compared byte-for-byte to their Git objects, and the imported schema source path
 was asserted before pytest. Using the same final locked environment and a separate
-disposable `scope_before_test` database, it produced **136 failures / 47 passes in
-61.23s**. These include genuine unsafe acceptance, positive supported-boundary
-cases and clarification behaviour; they are not 136 distinct defects.
+disposable `scope_before_test` database, it produced **206 failures / 67 passes in
+62.17s**. These include genuine unsafe acceptance, positive supported-boundary
+cases and clarification behaviour; they are not 206 distinct defects.
 
-The existing **1,599** cases remain unchanged, giving **1,782 tests**. Persistence
+The existing **1,599** cases and their assertions are retained, giving **1,872
+tests**. One existing queue test changes only its final polling budget as explained
+below; all other original test files are unchanged. Persistence
 cases compare complete notes, exact quantities/prices/VAT, unchanged rejection
 version, one controlled persisted reply, no success acknowledgement and safe run
 action/error metadata. Two cases also prove another tenant's full state remains
@@ -378,17 +384,17 @@ unchanged and raw restricted-role reads/writes cannot reach the first tenant.
 
 | Validation | Result |
 | --- | --- |
-| Complete Python 3.13.5/PostgreSQL 17 suite with separate owner/runtime roles | **1,782 passed**, no skips, 276.88s |
+| Complete Python 3.13.5/PostgreSQL 17 suite with separate owner/runtime roles | **1,872 passed**, no skips, 290.83s |
 | Ruff lint / formatting | Passed; 104 Python files formatted |
 | Strict Mypy / Bandit | Passed; 39 source files, no security-pattern findings |
 | Frozen sync / locked dependency audit | Passed; 72 audited packages, no known vulnerabilities/adverse statuses |
-| Fresh runtime and development Docker builds | Passed; runtime UID 10001; changed source and lock hashes match |
-| Docker signed-ingress/restricted-role persistence cases | **63 passed**, 56.52s, in the development image against a separate disposable database |
-| Runtime Docker smoke | Actual API live/ready HTTP 200, both reported interpretations reject with notes unchanged, packaged isolated launcher rejects invalid input privately |
-| Independent prior-review probes outside the repository | **37 passed**, 20.69s; the previous nine failures for these two findings now reject correctly and 28 controls remain valid |
+| Fresh runtime and development Docker builds | Passed; runtime UID 10001; all 41 runtime and 82 development source/test/project/lock files match |
+| Docker scope validation and signed-ingress/restricted-role persistence cases | **273 passed**, 59.53s, including all 100 persistence cases, in the development image against a separate disposable database |
+| Runtime Docker smoke | Actual API live/ready HTTP 200, both reported and adjacent scope/heading interpretations reject with notes unchanged; explicit-unit/total control accepts; packaged isolated launcher rejects invalid input privately |
+| Independent prior-review probes outside the repository | **37 passed**, 23.75s; the previous nine failures for these two findings now reject correctly and 28 controls remain valid |
 | GitHub Actions | Exact published-head run/result linked in PR #4 after upload |
 
-The runtime image is `sha256:a66c14559f2e86560604e9f42caa6290bb79b7f6654a186e299d2a4fc9a459a2`.
+The runtime image is `sha256:bc44c8c4cf9237369292e48298684a938b048078c673cdfb426a76fce48c58f2`.
 Docker builds used the approved combined CA bundle as a BuildKit secret with TLS
 verification intact. Signed tests replace only provider/key transports and use
 the real application ingress, signatures, worker, outbox, transactions and RLS.
@@ -405,11 +411,28 @@ stated units plus an invoice total in the same clause, including the previously
 supported `3 valves at €25 each invoice total €75` case. They fail before this
 follow-up correction and pass after it; no original assertion was changed.
 
-GitHub run 19 at `4d95cb9` passed the financial cases but failed the unchanged
-queue-drain test's final send-count assertion: 202 replies existed and 107 sends
-had completed after its fixed polling loop. Queue code and all its assertions
-remain unchanged. The exact final-head CI outcome, including any retry, is recorded
-in PR #4; this earlier result is retained rather than presented as an all-green run.
+GitHub runs 19 (`4d95cb9`) and 20 (`5ae34a6`) passed the financial cases but
+failed the unchanged queue-drain test's final send-count assertion: 202 replies
+existed and only 107/105 sends completed within twelve drain polling rounds.
+Claim order and durable source order differ, so concurrent successors may
+legitimately defer to another poll; twelve rounds is not a production guarantee.
+The test now starts drain rounds for up to 30 seconds using `perf_counter`, while
+an already started batch may finish after that polling budget. It retains the
+initial four-round locked-row fairness bound, real scheduling/cooldowns and every
+completion, deduplication, attempt, receipt and RLS assertion. All 44 assertion
+ASTs in that module are identical to `29a19d2`; production queue code is unchanged.
+The original isolated case passed in 32.06s; three patched runs passed in 62.63s,
+41.52s and 43.07s. Total duration includes earlier lock-held phases and is not a
+production timing claim. The final exact-head CI outcome is recorded in PR #4;
+these earlier failures remain disclosed.
+
+Further scoped review added invoice net/final/gross and both-items total labels,
+whole-document amounts without a total noun, and VAT headings after a compatible
+assertion. These were reproduced before each follow-up correction: the invoice
+modifier unit selection had 20 failures/4 passes, the whole-document selection
+had 2 failures/18 passes, and the VAT heading selection had 12 failures/1 pass.
+The final regressions also retain positive complete-invoice sums for the new
+labels and an unrelated repairs question alongside affirmative VAT instructions.
 
 Reproduce the focused cases with dedicated disposable owner/runtime connections:
 
