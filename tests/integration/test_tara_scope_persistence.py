@@ -31,6 +31,14 @@ TOTAL_LABELS = [
     "whole invoice price",
     "price for the entire invoice",
     "grand cost",
+    "invoice net total",
+    "invoice final total",
+    "total due for the invoice",
+    "total for both items",
+    "invoice gross total",
+    "net total of this invoice",
+    "whole invoice",
+    "entire bill",
 ]
 VAT_CHOICES = [
     "VAT options:\nVAT 23%",
@@ -110,9 +118,20 @@ def test_invoice_scope_never_becomes_a_line_total(
 
 
 @pytest.mark.parametrize("total,accepted", [("90", False), ("110", True)])
+@pytest.mark.parametrize(
+    "label",
+    [
+        "invoice total",
+        "invoice net total",
+        "total due for the invoice",
+        "total for both items",
+        "whole invoice",
+    ],
+)
 def test_full_invoice_consistency_does_not_allocate_or_round(
     total,
     accepted,
+    label,
     messaging_client,
     database,
     seed,
@@ -120,7 +139,7 @@ def test_full_invoice_consistency_does_not_allocate_or_round(
 ):
     worker, ai = establish(messaging_client, database, seed, bearer)
     before = rows(database, "tara_states")[0]
-    message = f"Make valves unit price €30 each; invoice total €{total}"
+    message = f"Make valves unit price €30 each; {label} €{total}"
     ai.results.append(patch("Make valves unit price €30 each", "30"))
     identifier = accept(messaging_client, message)
     assert worker.process_delivery(identifier)
@@ -308,3 +327,66 @@ def test_scope_rejection_preserves_the_other_tenant(
             {"id": seed.businesses["a"]},
         )
         assert result.rowcount == 0
+
+
+@pytest.mark.parametrize(
+    "message,field,value,evidence",
+    [
+        ("VAT 23%\nVAT options:\nincluding VAT", "vat_basis", "inclusive", "including VAT"),
+        (
+            "VAT 23%; Choose VAT treatment:\nincluding VAT",
+            "vat_basis",
+            "inclusive",
+            "including VAT",
+        ),
+        (
+            "VAT 23%\nWhich VAT treatment applies?\nincluding VAT",
+            "vat_basis",
+            "inclusive",
+            "including VAT",
+        ),
+        ("VAT 23%\nChoices for VAT:\nincluding VAT", "vat_basis", "inclusive", "including VAT"),
+        ("Use VAT 23%; Either:\nincluding VAT", "vat_basis", "inclusive", "including VAT"),
+        ("Including VAT\nVAT options:\nVAT 23%", "vat_rate", "23", "23%"),
+    ],
+)
+@pytest.mark.parametrize("cropped", [False, True])
+def test_later_vat_choice_heading_preserves_saved_fields_and_clarifies(
+    message,
+    field,
+    value,
+    evidence,
+    cropped,
+    messaging_client,
+    database,
+    seed,
+    bearer,
+):
+    worker, ai = establish(messaging_client, database, seed, bearer)
+    set_vat(worker, ai, messaging_client)
+    before = rows(database, "tara_states")[0]
+    ai.results.append(proposal([change(field, value, evidence if cropped else message)]))
+    identifier = accept(messaging_client, message)
+    assert worker.process_delivery(identifier)
+    assert_rejected(database, identifier, before)
+    assert notes(database)["vat_basis"] == "exclusive"
+    assert notes(database)["vat_rate"] == "13.5"
+
+
+def test_later_unrelated_question_preserves_affirmative_vat_updates(
+    messaging_client, database, seed, bearer
+):
+    worker, ai = establish(messaging_client, database, seed, bearer)
+    set_vat(worker, ai, messaging_client)
+    before = rows(database, "tara_states")[0]
+    message = "Use VAT 23%; which repairs apply?\nincluding VAT"
+    ai.results.append(
+        proposal([change("vat_rate", "23", message), change("vat_basis", "inclusive", message)])
+    )
+    identifier = accept(messaging_client, message)
+    assert worker.process_delivery(identifier)
+    assert notes(database) == {**before["notes"], "vat_rate": "23", "vat_basis": "inclusive"}
+    assert "Updated that." in reply_body(database, identifier)
+    run = rows(database, "tara_runs", "WHERE message_id = :id", {"id": identifier})[0]
+    assert run["action"] == "notes_merged"
+    assert run["error_code"] is None

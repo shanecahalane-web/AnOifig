@@ -28,6 +28,14 @@ INVOICE_TOTALS = [
     "whole invoice price",
     "price for the entire invoice",
     "grand cost",
+    "invoice net total",
+    "invoice final total",
+    "total due for the invoice",
+    "total for both items",
+    "invoice gross total",
+    "net total of this invoice",
+    "whole invoice",
+    "entire bill",
 ]
 VAT_CHOICES = [
     "VAT options:\nVAT 23%",
@@ -176,8 +184,18 @@ def test_item_totals_still_validate_exact_products(message):
 
 
 @pytest.mark.parametrize("total,accepted", [("110", True), ("90", False)])
-def test_stated_unit_price_and_invoice_total_use_the_complete_item_list(total, accepted):
-    message = f"Make valves unit price €30 each; invoice total €{total}"
+@pytest.mark.parametrize(
+    "label",
+    [
+        "invoice total",
+        "invoice net total",
+        "total due for the invoice",
+        "total for both items",
+        "whole invoice",
+    ],
+)
+def test_stated_unit_price_and_invoice_total_use_the_complete_item_list(total, accepted, label):
+    message = f"Make valves unit price €30 each; {label} €{total}"
     original = InvoiceNotes(vat_basis="no_vat", line_items=ITEMS)
     proposal = patch("Make valves unit price €30 each")
     if not accepted:
@@ -280,3 +298,58 @@ def test_compatible_affirmative_and_unrelated_statements_remain_supported(messag
     p = proposed(changes=[{"field": field, "value": value, "evidence": message}])
     updated = apply_proposal(original, p, message)
     assert updated.model_dump() == {**original.model_dump(), field: value}
+
+
+@pytest.mark.parametrize(
+    "message,field,value,evidence",
+    [
+        ("VAT 23%\nVAT options:\nincluding VAT", "vat_basis", "inclusive", "including VAT"),
+        (
+            "VAT 23%; Choose VAT treatment:\nincluding VAT",
+            "vat_basis",
+            "inclusive",
+            "including VAT",
+        ),
+        (
+            "VAT 23%\nWhich VAT treatment applies?\nincluding VAT",
+            "vat_basis",
+            "inclusive",
+            "including VAT",
+        ),
+        ("VAT 23%\nChoices for VAT:\nincluding VAT", "vat_basis", "inclusive", "including VAT"),
+        ("Use VAT 23%; Either:\nincluding VAT", "vat_basis", "inclusive", "including VAT"),
+        ("Including VAT\nVAT options:\nVAT 23%", "vat_rate", "23", "23%"),
+    ],
+)
+@pytest.mark.parametrize("cropped", [False, True])
+def test_later_vat_choice_heading_cannot_be_hidden_by_a_compatible_assertion(
+    message, field, value, evidence, cropped
+):
+    selected = evidence if cropped else message
+    if field == "vat_basis":
+        assert not vat_evidence(value, message)
+    else:
+        assert not _vat_rate_evidence(value, selected, message, None)
+    original = saved()
+    before = original.model_dump()
+    p = proposed(changes=[{"field": field, "value": value, "evidence": selected}])
+    with pytest.raises(ValueError):
+        apply_proposal(original, p, message)
+    assert original.model_dump() == before
+
+
+def test_a_later_question_about_repairs_does_not_make_compatible_vat_assertions_choices():
+    message = "Use VAT 23%; which repairs apply?\nincluding VAT"
+    original = saved()
+    p = proposed(
+        changes=[
+            {"field": "vat_rate", "value": "23", "evidence": message},
+            {"field": "vat_basis", "value": "inclusive", "evidence": message},
+        ]
+    )
+    updated = apply_proposal(original, p, message)
+    assert updated.model_dump() == {
+        **original.model_dump(),
+        "vat_rate": "23",
+        "vat_basis": "inclusive",
+    }

@@ -268,15 +268,15 @@ def _vat_treatment_alternatives(message: str) -> bool:
     }
     if len(rates) > 1 or len(bases) > 1 or treatments_without_rate and len(facts) > 1:
         return True
-    heading = message[: current[0].start] if current else ""
-    if re.search(
+    heading_pattern = (
         r"(?:^|[;\n.!?])\s*(?:(?:vat\s+)?(?:options?|choices?|alternatives?)(?:\s+for\s+vat)?|"
         r"(?:choose|select)(?:\s+(?:one|vat(?:\s+(?:treatment|rate))?))?|either)\s*:|"
         r"(?:^|[;\n.!?])\s*(?:what|which|should|could|would|is|are)\b[^;\n.!?]*\bvat\b"
-        r"[^;\n.!?]*[?:]\s*$",
-        heading,
-        re.I,
-    ):
+        r"[^;\n.!?]*[?:]\s*$"
+    )
+    # A compatible earlier assertion cannot turn a later question or option
+    # heading into an affirmative instruction for the following VAT assertion.
+    if any(re.search(heading_pattern, message[: assertion.start], re.I) for assertion in current):
         return True
     alternative = (
         r"\bor\b|\bversus\b|\bvs\.?\b|/|\balternatively\b|"

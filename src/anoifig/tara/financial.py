@@ -46,12 +46,20 @@ def _invoice_scope(text: str, *, item_bound: bool = False) -> bool:
     document = (
         r"(?:(?:the|this)\s+)?(?:(?:whole|entire|full)\s+)?(?:invoice|bill)(?:['’]s|[ -]wide)?"
     )
+    # Qualifiers describe the document amount; they cannot narrow it to one
+    # selected item. Keep these within the label rather than matching unrelated
+    # uses of the verb "invoice" elsewhere in the item clause.
+    qualifier = r"(?:(?:net|gross|final|outstanding|remaining|payable)\s+)*"
+    due = r"(?:\s+(?:due|payable|outstanding))?"
+    items = r"(?:all|both)\s+(?:items|lines)"
     return bool(
         re.search(
-            rf"\b{document}\s+{amount}\b|\b{amount}\s+(?:(?:for|of|across)\s+)?{document}\b|"
+            r"\b(?:whole|entire|full|overall)\s+(?:invoice|bill)\b|"
+            rf"\b{document}\s+{qualifier}{amount}\b|"
+            rf"\b{amount}{due}\s+(?:(?:for|of|across|on)\s+)?{document}\b|"
             rf"\bgrand[ -]+{amount}\b|\boverall[ -]+(?:total|subtotal)\b|"
-            rf"\b{amount}\s+(?:for|of|across)\s+(?:the\s+)?all\s+(?:items|lines)\b|"
-            rf"\ball\s+(?:items|lines)\s+{amount}\b",
+            rf"\b{amount}{due}\s+(?:for|of|across)\s+(?:the\s+)?{items}\b|"
+            rf"\b{items}\s+{qualifier}{amount}\b",
             text,
             re.I,
         )
