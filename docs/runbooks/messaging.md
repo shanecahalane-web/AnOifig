@@ -2,8 +2,9 @@
 
 This runbook describes Milestone 2 local development and requirements for a
 future reviewed deployment. It does not provision Azure, connect live accounts,
-change production Twilio settings or authorise chargeable sends. There is no
-OpenAI, voice, invoice or interactive Flow implementation.
+change production Twilio settings or authorise chargeable sends. Milestone 3 adds optional Tara AI processing in the worker; see the
+[Tara runbook](tara.md). Voice, invoice issuance and interactive Flows remain
+unavailable. The original acknowledgement is retained in local mode.
 
 ## Local API and worker
 
