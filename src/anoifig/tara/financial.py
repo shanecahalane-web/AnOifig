@@ -11,6 +11,13 @@ from dataclasses import dataclass
 from decimal import Decimal
 from enum import StrEnum
 
+from anoifig.tara.assertions import (
+    AssertionContext,
+    AssertionIntent,
+    DocumentScope,
+    assertion_context,
+)
+
 
 @dataclass(frozen=True)
 class NumericToken:
@@ -27,17 +34,82 @@ class Clause:
 
 
 class AmountScope(StrEnum):
+    UNIT = "unit"
     LINE_ITEM = "line_item"
     INVOICE = "invoice"
     PARTIAL = "partial"
+    AMBIGUOUS = "ambiguous"
+
+
+class FinancialRole(StrEnum):
+    QUANTITY = "quantity"
+    UNIT_PRICE = "unit_price"
+    TOTAL = "total"
+    AMOUNT = "amount"
+    LABOUR = "labour"
+    MATERIALS = "materials"
+    CHARGE = "charge"
+    UNCLASSIFIED = "unclassified"
+
+
+@dataclass(frozen=True)
+class FinancialEvidence:
+    """A role belongs to one original expression, never a model-selected excerpt."""
+
+    value: Decimal
+    start: int
+    end: int
+    role: FinancialRole
+    scope: AmountScope | None
+    item_identity: str | None
+    source: Clause
+    assertion: AssertionContext
+
+    @property
+    def affirmative(self) -> bool:
+        return (
+            self.assertion.intent == AssertionIntent.AFFIRMATIVE
+            and self.assertion.document_scope == DocumentScope.CURRENT
+        )
 
 
 @dataclass(frozen=True)
 class ItemNumberRoles:
-    quantity: bool
-    unit_price: bool
-    total_scope: AmountScope | None
+    evidence: FinancialEvidence
     conflict: bool
+
+    @property
+    def quantity(self) -> bool:
+        return self.evidence.role == FinancialRole.QUANTITY
+
+    @property
+    def unit_price(self) -> bool:
+        return (
+            self.evidence.role == FinancialRole.UNIT_PRICE
+            and self.evidence.scope == AmountScope.UNIT
+        )
+
+    @property
+    def total_scope(self) -> AmountScope | None:
+        return self.evidence.scope if self.evidence.role == FinancialRole.TOTAL else None
+
+
+@dataclass(frozen=True)
+class FinancialItemState:
+    identity: int
+    description: str
+    quantity: Decimal
+    unit_price: Decimal
+    source_descriptions: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class FinancialState:
+    items: tuple[FinancialItemState, ...]
+    vat_basis: str | None
+    amount: Decimal | None = None
+    labour: Decimal | None = None
+    materials: Decimal | None = None
 
 
 def _invoice_scope(text: str, *, item_bound: bool = False) -> bool:
@@ -51,7 +123,9 @@ def _invoice_scope(text: str, *, item_bound: bool = False) -> bool:
     # uses of the verb "invoice" elsewhere in the item clause.
     qualifier = r"(?:(?:net|gross|final|outstanding|remaining|payable)\s+)*"
     due = r"(?:\s+(?:due|payable|outstanding))?"
-    items = r"(?:all|both)\s+(?:items|lines)"
+    # Quantifier, determiner and noun phrase compose independently. Scope does
+    # not depend on a particular spelling of an aggregate label.
+    items = r"(?:all|both)\s+(?:of\s+)?(?:(?:the|these|those)\s+)?(?:line\s+)?(?:items|lines)"
     return bool(
         re.search(
             r"\b(?:whole|entire|full|overall)\s+(?:invoice|bill)\b|"
@@ -64,7 +138,22 @@ def _invoice_scope(text: str, *, item_bound: bool = False) -> bool:
             re.I,
         )
         or not item_bound
-        and re.search(rf"\boverall\s+{amount}\b", text, re.I)
+        and (
+            re.search(rf"\boverall\s+{amount}\b", text, re.I)
+            or re.search(r"\b(?:total|subtotal)\b", text, re.I)
+            and re.search(r"\b(?:line|item)\s+(?:total|subtotal)\b", text, re.I) is None
+        )
+    )
+
+
+def _ambiguous_aggregate_scope(text: str) -> bool:
+    """An unsupported wider target cannot silently become a selected line."""
+    amount = r"(?:total|subtotal|amount|price|cost|value|balance|sum)"
+    wider = r"(?:all|both|whole|entire|full)\b"
+    return any(
+        re.search(rf"\b{amount}\b", label, re.I) is not None
+        and re.search(rf"\b{wider}", label, re.I) is not None
+        for label in re.split(r"[0-9;\n]", text)
     )
 
 
@@ -572,11 +661,26 @@ def _item_number_tokens(text: str, description: str | None) -> list[NumericToken
     ]
 
 
+def _unit_price_label(before: str, after: str) -> bool:
+    per_unit = r"(?:each|apiece|per[ -]+(?:item|unit))"
+    return bool(
+        re.search(
+            rf"\b(?:unit\s+(?:price|cost)|{per_unit})\s*(?:(?:is|to|of|:|=)\s*)?$",
+            before,
+            re.I,
+        )
+        or re.match(rf"\s*{per_unit}\b", after, re.I)
+    )
+
+
 def _item_number_roles(
     token: NumericToken,
     text: str,
     description: str | None,
     tokens: list[NumericToken],
+    *,
+    message: str | None = None,
+    clause_start: int = 0,
 ) -> ItemNumberRoles:
     """Keep the monetary scope separate from quantity and unit-price roles."""
     previous = max((other.end for other in tokens if other.end <= token.start), default=0)
@@ -608,10 +712,16 @@ def _item_number_roles(
     invoice = _invoice_scope(before, item_bound=description is not None) or (
         following == len(text) and _invoice_scope(after, item_bound=description is not None)
     )
+    ambiguous_scope = not invoice and (
+        _ambiguous_aggregate_scope(before)
+        or following == len(text)
+        and _ambiguous_aggregate_scope(after)
+    )
     total = not quantity_total and bool(
         re.search(r"\b(?:total|subtotal|overall|deposit)\b", before, re.I)
         or re.match(r"\s*(?:in\s+)?(?:total|subtotal|overall|deposit)\b", after, re.I)
         or invoice
+        or ambiguous_scope
     )
     partial = bool(re.search(r"\bdeposit\b", before + " " + after, re.I))
     scope = None
@@ -621,15 +731,11 @@ def _item_number_roles(
             if partial
             else AmountScope.INVOICE
             if invoice
+            else AmountScope.AMBIGUOUS
+            if ambiguous_scope
             else AmountScope.LINE_ITEM
         )
-    per_unit = r"(?:each|apiece|per[ -]+(?:item|unit))"
-    explicit_unit = bool(
-        re.search(
-            rf"\b(?:unit\s+(?:price|cost)|{per_unit})\s*(?:(?:is|to|of|:|=)\s*)?$", before, re.I
-        )
-        or re.match(rf"\s*{per_unit}\b", after, re.I)
-    )
+    explicit_unit = _unit_price_label(before, after)
     price = bool(
         _monetary(token, text)
         or re.search(
@@ -641,12 +747,30 @@ def _item_number_roles(
     )
     # Generic labels never override a line total. Combining explicit unit and
     # total semantics on the same expression also requires clarification.
-    return ItemNumberRoles(
-        not price and (labelled_quantity or noun_quantity),
-        price and not labelled_quantity and not total,
-        scope,
-        partial or total and explicit_unit,
+    quantity = not price and (labelled_quantity or noun_quantity)
+    unit_price = price and not labelled_quantity and not total
+    role = (
+        FinancialRole.TOTAL
+        if total
+        else FinancialRole.QUANTITY
+        if quantity
+        else FinancialRole.UNIT_PRICE
+        if unit_price
+        else FinancialRole.UNCLASSIFIED
     )
+    original = text if message is None else message
+    start, end = clause_start + token.start, clause_start + token.end
+    evidence = FinancialEvidence(
+        token.value,
+        start,
+        end,
+        role,
+        AmountScope.UNIT if unit_price else scope,
+        description.casefold() if description is not None else None,
+        Clause(clause_start, clause_start + len(text), text),
+        assertion_context(original, start, end, topic="financial"),
+    )
+    return ItemNumberRoles(evidence, partial or total and explicit_unit or ambiguous_scope)
 
 
 def _item_numbers_supported(text: str, description: str | None, tokens: list[NumericToken]) -> bool:
@@ -660,6 +784,82 @@ def _item_numbers_supported(text: str, description: str | None, tokens: list[Num
         any(token.start <= raw.start() and raw.end() <= token.end for token in tokens)
         or any(name.start() <= raw.start() and raw.end() <= name.end() for name in names)
         for raw in re.finditer(r"[0-9]+(?:[.,][0-9]+)*", text)
+    )
+
+
+def _scalar_number_evidence(
+    token: NumericToken, message: str, clause: Clause
+) -> FinancialEvidence | None:
+    """Classify a scalar source without replacing explicit unit/partial scope."""
+    text = clause.text
+    start, end = token.start - clause.start, token.end - clause.start
+    if re.search(r"(?<!\w)[0-9][0-9.,]*\s*[xX]\s*(?:€|EUR|euros?)?\s*[0-9]", text, re.I):
+        return None
+    tokens = numeric_tokens(text)
+    previous = max((other.end for other in tokens if other.end <= start), default=0)
+    following = min((other.start for other in tokens if other.start >= end), default=len(text))
+    before, after = text[previous:start], text[end:following]
+    before = re.sub(r"(?:€|\b(?:EUR|euros?))\s*$", "", before, flags=re.I)
+    after = re.sub(r"^\s*(?:€|EUR\b|euros?\b|e\b)", "", after, flags=re.I)
+    postfix = after if following == len(text) else ""
+    scope: AmountScope | None
+    if re.search(r"\bdeposit\b", before + " " + postfix, re.I):
+        actual, scope = FinancialRole.TOTAL, AmountScope.PARTIAL
+    elif _unit_price_label(before, after):
+        actual, scope = FinancialRole.UNIT_PRICE, AmountScope.UNIT
+    elif _invoice_scope(before) or _invoice_scope(postfix):
+        actual, scope = FinancialRole.AMOUNT, AmountScope.INVOICE
+    elif _ambiguous_aggregate_scope(before) or _ambiguous_aggregate_scope(postfix):
+        actual, scope = FinancialRole.UNCLASSIFIED, AmountScope.AMBIGUOUS
+    else:
+        labels = list(
+            re.finditer(r"\b(labou?r|materials?|amount|total|charge|price)\b", text, re.I)
+        )
+        preceding = [
+            label
+            for label in labels
+            if label.end() <= start and not re.search(r"[0-9]", text[label.end() : start])
+        ]
+        following_labels = [
+            label
+            for label in labels
+            if label.start() >= end
+            and re.fullmatch(r"\s*(?:for|on)\s*", text[end : label.start()], re.I)
+        ]
+        label = following_labels[0] if following_labels else preceding[-1] if preceding else None
+        if label:
+            found = label.group().casefold()
+            actual = (
+                FinancialRole.LABOUR
+                if found in {"labour", "labor"}
+                else FinancialRole.MATERIALS
+                if found in {"material", "materials"}
+                else FinancialRole.AMOUNT
+            )
+            scope = AmountScope.INVOICE if actual == FinancialRole.AMOUNT else AmountScope.PARTIAL
+        else:
+            monetary = [
+                candidate for candidate in numeric_tokens(message) if _monetary(candidate, message)
+            ]
+            if not (
+                len(monetary) == 1
+                and token == monetary[0]
+                or not monetary
+                and len(numeric_tokens(message)) == 1
+            ):
+                return None
+            # The existing unique-charge shorthand has no explicit scalar role.
+            # Keep that uncertainty rather than inventing an aggregate label.
+            actual, scope = FinancialRole.CHARGE, None
+    return FinancialEvidence(
+        token.value,
+        token.start,
+        token.end,
+        actual,
+        scope,
+        None,
+        clause,
+        assertion_context(message, token.start, token.end, topic="financial"),
     )
 
 
@@ -679,57 +879,42 @@ def role_matches(
         if len(tokens) > 3:
             return False
         roles = _item_number_roles(
-            NumericToken(start, end, token.value), text, item_description, tokens
+            NumericToken(start, end, token.value),
+            text,
+            item_description,
+            tokens,
+            message=message,
+            clause_start=clause.start,
         )
         if role == "unit_price":
             # Bare at/price/cost values participate just like marked currency.
             candidates = [
                 candidate
                 for candidate in tokens
-                if _item_number_roles(candidate, text, item_description, tokens).unit_price
+                if _item_number_roles(
+                    candidate,
+                    text,
+                    item_description,
+                    tokens,
+                    message=message,
+                    clause_start=clause.start,
+                ).unit_price
             ]
             return (
                 roles.unit_price
                 and not roles.conflict
+                and roles.evidence.affirmative
                 and len(candidates) == 1
                 and _item_numbers_supported(text, item_description, tokens)
             )
-        return roles.quantity and not roles.conflict
+        return roles.quantity and not roles.conflict and roles.evidence.affirmative
     if role in {"amount", "labour", "materials"}:
-        # Quantity shorthand is not a stated scalar charge. Neither operand
-        # supplies the amount, even when only the price has a currency marker.
-        if re.search(r"(?<!\w)[0-9][0-9.,]*\s*[xX]\s*(?:€|EUR|euros?)?\s*[0-9]", text, re.I):
-            return False
-        labels = list(
-            re.finditer(r"\b(labou?r|materials?|amount|total|charge|price)\b", text, re.I)
+        source = _scalar_number_evidence(token, message, clause)
+        return (
+            source is not None
+            and source.role in {FinancialRole(role), FinancialRole.CHARGE}
+            and source.affirmative
         )
-        preceding = [
-            label
-            for label in labels
-            if label.end() <= start and not re.search(r"[0-9]", text[label.end() : start])
-        ]
-        following = [
-            label
-            for label in labels
-            if label.start() >= end
-            and re.fullmatch(r"\s*(?:for|on)\s*", text[end : label.start()], re.I)
-        ]
-        label = following[0] if following else preceding[-1] if preceding else None
-        if label:
-            found = label.group().casefold()
-            actual = (
-                "labour"
-                if found in {"labour", "labor"}
-                else ("materials" if found in {"material", "materials"} else "amount")
-            )
-            return actual == role
-        # Multiple unlabelled numbers are not a determinate scalar update.
-        monetary_candidates = [
-            candidate for candidate in numeric_tokens(message) if _monetary(candidate, message)
-        ]
-        if monetary_candidates:
-            return len(monetary_candidates) == 1 and token == monetary_candidates[0]
-        return len(numeric_tokens(message)) == 1
     return True
 
 
@@ -820,7 +1005,23 @@ def line_total_matches(
     tokens = _item_number_tokens(within, item_description)
     if len(tokens) > 3:
         return False
-    roles = [_item_number_roles(token, within, item_description, tokens) for token in tokens]
+    contexts = [
+        clause for clause in item_clauses(message, item_description) if clause.text == within
+    ]
+    if len(contexts) != 1:
+        return False
+    context = contexts[0]
+    roles = [
+        _item_number_roles(
+            token,
+            within,
+            item_description,
+            tokens,
+            message=message,
+            clause_start=context.start,
+        )
+        for token in tokens
+    ]
     # "A total of 3 valves" describes a quantity, unlike a monetary line total.
     labelled = re.sub(
         r"\btotal\s+of(?=\s+[0-9][0-9,.]*\s+" + re.escape(item_description) + r"(?!\w))",
@@ -841,15 +1042,12 @@ def line_total_matches(
         or not _item_numbers_supported(within, item_description, tokens)
         or financial_negative_clause(within)
         or any(role.conflict for role in roles)
+        or any(not role.evidence.affirmative for role in roles)
     ):
         return False
-    totals = [
-        token
-        for token, role in zip(tokens, roles, strict=True)
-        if role.total_scope == AmountScope.LINE_ITEM
-    ]
-    quantities = [token for token, role in zip(tokens, roles, strict=True) if role.quantity]
-    prices = [token for token, role in zip(tokens, roles, strict=True) if role.unit_price]
+    totals = [role.evidence for role in roles if role.total_scope == AmountScope.LINE_ITEM]
+    quantities = [role.evidence for role in roles if role.quantity]
+    prices = [role.evidence for role in roles if role.unit_price]
     return (
         len(totals) <= 1
         and len(prices) <= 1
@@ -908,57 +1106,249 @@ def unit_price_evidence(
             continue
         tokens = _item_number_tokens(within, item_description)
         for token in tokens:
-            if (
-                _item_number_roles(token, within, item_description, tokens).total_scope
-                != AmountScope.LINE_ITEM
-            ):
+            roles = _item_number_roles(
+                token,
+                within,
+                item_description,
+                tokens,
+                message=message,
+                clause_start=clause.start,
+            )
+            source = roles.evidence
+            if roles.total_scope != AmountScope.LINE_ITEM or not source.affirmative:
                 continue
-            start, end = clause.start + token.start, clause.start + token.end
-            if nonassertive_expression(message, clause, start, end):
+            if nonassertive_expression(message, clause, source.start, source.end):
                 return False
             if any(
-                left <= start and end <= right for left, right in evidence_spans(message, evidence)
+                left <= source.start and source.end <= right
+                for left, right in evidence_spans(message, evidence)
             ):
                 return True
     return False
 
 
-def invoice_total_matches(
-    message: str, total: Decimal | None, *, item_descriptions: tuple[str, ...]
-) -> bool:
-    """Check an explicit invoice total only against a complete, unambiguous sum.
-
-    No tax, discount, deposit or allocation arithmetic is inferred. None means
-    the caller cannot establish the invoice sum from the supported notes.
-    """
-    totals: list[Decimal] = []
+def _invoice_evidence(
+    message: str, item_descriptions: tuple[str, ...]
+) -> tuple[list[FinancialEvidence], bool]:
+    """Retain every current wider assertion, including unsupported expressions."""
+    totals: list[FinancialEvidence] = []
     for clause in clauses(message):
         bound = any(
             re.search(r"(?<!\w)" + re.escape(name) + r"(?!\w)", clause.text, re.I)
             for name in item_descriptions
         )
-        if not _invoice_scope(clause.text, item_bound=bound):
+        invoice = _invoice_scope(clause.text, item_bound=bound)
+        if not invoice and not _ambiguous_aggregate_scope(clause.text):
             continue
         tokens = numeric_tokens(clause.text)
+        scoped = [
+            role.evidence
+            for token in tokens
+            if (
+                role := _item_number_roles(
+                    token,
+                    clause.text,
+                    None,
+                    tokens,
+                    message=message,
+                    clause_start=clause.start,
+                )
+            ).total_scope
+            in {AmountScope.INVOICE, AmountScope.AMBIGUOUS}
+        ]
+        # Historical amounts do not constrain this preparation. The complete
+        # label still supplies context when malformed numeric syntax yielded no
+        # valid token, so unsupported current expressions cannot disappear.
+        context = (
+            scoped[0].assertion
+            if scoped
+            else assertion_context(message, clause.start, clause.end, topic="financial")
+        )
+        if context.document_scope == DocumentScope.HISTORICAL:
+            continue
         if (
-            not expression_context_safe(message, numeric_tokens(message))
+            not invoice
+            or not expression_context_safe(message, numeric_tokens(message))
             or not _complete_clause_safe(clause.text)
             or not _item_numbers_supported(clause.text, None, tokens)
             or financial_negative_clause(clause.text)
+            or len(scoped) != 1
         ):
-            return False
-        scoped = [
-            token
-            for token in tokens
-            if _item_number_roles(token, clause.text, None, tokens).total_scope
-            == AmountScope.INVOICE
-        ]
-        if len(scoped) != 1:
-            return False
-        token = scoped[0]
-        if nonassertive_expression(
-            message, clause, clause.start + token.start, clause.start + token.end
+            return totals, False
+        source = scoped[0]
+        if (
+            not source.affirmative
+            or source.scope != AmountScope.INVOICE
+            or nonassertive_expression(message, clause, source.start, source.end)
         ):
-            return False
-        totals.append(token.value)
-    return not totals or total is not None and all(value == total for value in totals)
+            return totals, False
+        totals.append(source)
+    return totals, True
+
+
+def invoice_total_matches(
+    message: str, total: Decimal | None, *, item_descriptions: tuple[str, ...]
+) -> bool:
+    """Check current invoice evidence against a complete, unambiguous sum.
+
+    No tax, discount, deposit or allocation arithmetic is inferred. None means
+    the caller cannot establish the invoice sum from the supported notes.
+    """
+    totals, supported = _invoice_evidence(message, item_descriptions)
+    return supported and (
+        not totals or total is not None and all(source.value == total for source in totals)
+    )
+
+
+def _final_item_matches(
+    message: str, item: FinancialItemState, identities: tuple[tuple[str, int], ...]
+) -> bool:
+    """Check current source facts against the final item, including renamed selectors."""
+    names = tuple(dict.fromkeys((item.description, *item.source_descriptions)))
+    checked: set[tuple[int, int]] = set()
+    for name in names:
+        selector = re.compile(r"(?<!\w)" + re.escape(name) + r"(?!\w)", re.I)
+        for clause in item_clauses(message, name):
+            if (
+                not selector.search(clause.text)
+                or not re.search(r"[0-9]", selector.sub("", clause.text))
+                or (clause.start, clause.end) in checked
+            ):
+                continue
+            checked.add((clause.start, clause.end))
+            tokens = _item_number_tokens(clause.text, name)
+            roles = [
+                _item_number_roles(
+                    token,
+                    clause.text,
+                    name,
+                    tokens,
+                    message=message,
+                    clause_start=clause.start,
+                )
+                for token in tokens
+            ]
+            context = (
+                roles[0].evidence.assertion
+                if roles
+                else assertion_context(message, clause.start, clause.end, topic="financial")
+            )
+            # The final check does not turn a historical fact or a question into
+            # a new instruction. Per-change grounding separately rejects using
+            # those expressions to support a financial mutation.
+            if (
+                context.document_scope == DocumentScope.HISTORICAL
+                or context.intent != AssertionIntent.AFFIRMATIVE
+            ):
+                continue
+            selected = {
+                identity
+                for alias, identity in identities
+                if re.search(r"(?<!\w)" + re.escape(alias) + r"(?!\w)", clause.text, re.I)
+            }
+            if (
+                selected != {item.identity}
+                or len(tokens) > 3
+                or not expression_context_safe(message, numeric_tokens(message))
+                or not _complete_clause_safe(clause.text)
+                or not _item_numbers_supported(clause.text, name, tokens)
+                or any(role.conflict for role in roles)
+            ):
+                return False
+            current = [
+                role.evidence
+                for role in roles
+                if role.evidence.affirmative and role.evidence.item_identity == name.casefold()
+            ]
+            quantities = [source for source in current if source.role == FinancialRole.QUANTITY]
+            prices = [source for source in current if source.scope == AmountScope.UNIT]
+            totals = [source for source in current if source.scope == AmountScope.LINE_ITEM]
+            if (
+                len(quantities) > 1
+                or len(prices) > 1
+                or len(totals) > 1
+                or any(source.role == FinancialRole.UNCLASSIFIED for source in current)
+                or any(source.value != item.quantity for source in quantities)
+                or any(source.value != item.unit_price for source in prices)
+                or any(source.value != item.quantity * item.unit_price for source in totals)
+            ):
+                return False
+    return True
+
+
+def _scalar_facts_consistent(message: str, final: FinancialState) -> bool:
+    facts: dict[FinancialRole, set[Decimal]] = {}
+    for clause in clauses(message):
+        tokens = numeric_tokens(clause.text)
+        names = tuple(
+            name
+            for item in final.items
+            for name in (item.description, *item.source_descriptions)
+            if re.search(r"(?<!\w)" + re.escape(name) + r"(?!\w)", clause.text, re.I)
+        )
+        for token in tokens:
+            item_roles = [
+                _item_number_roles(
+                    token, clause.text, name, tokens, message=message, clause_start=clause.start
+                )
+                for name in names
+            ]
+            if any(
+                role.evidence.scope in {AmountScope.LINE_ITEM, AmountScope.UNIT} or role.quantity
+                for role in item_roles
+            ):
+                continue
+            source = _scalar_number_evidence(
+                NumericToken(clause.start + token.start, clause.start + token.end, token.value),
+                message,
+                clause,
+            )
+            if (
+                source is not None
+                and source.affirmative
+                and source.role
+                in {FinancialRole.AMOUNT, FinancialRole.LABOUR, FinancialRole.MATERIALS}
+            ):
+                facts.setdefault(source.role, set()).add(source.value)
+    return all(len(values) == 1 for values in facts.values())
+
+
+def validate_final_financial_state(message: str, final: FinancialState) -> None:
+    """Validate complete current evidence once, after every proposed mutation.
+
+    Saved scalar charges may overlap detailed items. Their mere presence is not
+    a contradiction, but it prevents proving a current invoice total from the
+    item list. A saved aggregate never licenses allocating a difference to one
+    selected item. Without current evidence, legacy ambiguity is left alone.
+    """
+    descriptions = tuple(
+        dict.fromkeys(
+            name for item in final.items for name in (item.description, *item.source_descriptions)
+        )
+    )
+    identities = tuple(
+        (name, item.identity)
+        for item in final.items
+        for name in (item.description, *item.source_descriptions)
+    )
+    totals, supported = _invoice_evidence(message, descriptions)
+    if (
+        not supported
+        or not _scalar_facts_consistent(message, final)
+        or not all(_final_item_matches(message, item, identities) for item in final.items)
+    ):
+        raise ValueError("inconsistent or ambiguous financial evidence")
+    if not totals:
+        return
+    total = None
+    if final.items:
+        if final.vat_basis == "no_vat" and all(
+            value is None for value in (final.amount, final.labour, final.materials)
+        ):
+            total = sum((item.quantity * item.unit_price for item in final.items), Decimal(0))
+    elif final.amount is not None:
+        # With no detailed allocation, a literal current invoice/aggregate
+        # expression can establish the final scalar amount directly.
+        total = final.amount
+    if total is None or any(source.value != total for source in totals):
+        raise ValueError("inconsistent or ambiguous invoice total")

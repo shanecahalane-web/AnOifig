@@ -248,3 +248,71 @@ def test_independent_affirmative_vat_facts_and_historical_facts_remain_supported
         **original.model_dump(),
         **dict(changes),
     }
+
+
+ALTERNATIVE_WRITES = [
+    ("amount", "Set amount €90", "90"),
+    ("labour", "Labour €50", "50"),
+    ("materials", "Materials €40", "40"),
+    ("vat_rate", "Use VAT 23%", "23"),
+    ("vat_basis", "Use including VAT", "inclusive"),
+    ("customer_name", "Set customer name Jack", "Jack"),
+    ("description", "Rename valves to valve assemblies", "valve assemblies"),
+    ("empty", "", None),
+]
+
+
+def alternative_proposal(field, evidence, value):
+    if field == "description":
+        return patch(evidence, value, field="description")
+    if field == "empty":
+        return proposed()
+    return proposed(changes=[{"field": field, "value": value, "evidence": evidence}])
+
+
+def alternative_expected(original, field, value):
+    expected = original.model_dump()
+    if field == "description":
+        expected["line_items"][0]["description"] = value
+    elif field != "empty":
+        expected[field] = value
+    return expected
+
+
+@pytest.mark.parametrize("field,evidence,value", ALTERNATIVE_WRITES)
+@pytest.mark.parametrize("has_total", [True, False], ids=["contradictory-total", "no-total"])
+def test_universal_total_guard_covers_every_proposal_path(field, evidence, value, has_total):
+    original = saved(vat_basis="exclusive" if field.startswith("vat_") else "no_vat")
+    before = original.model_dump()
+    message = "; ".join(
+        part for part in (evidence, "invoice total €90" if has_total else "") if part
+    )
+    p = alternative_proposal(field, evidence, value)
+    if has_total:
+        with pytest.raises(ValueError):
+            apply_proposal(original, p, message, expected_version=4, current_version=4)
+    else:
+        updated = apply_proposal(original, p, message, expected_version=4, current_version=4)
+        assert updated.model_dump() == alternative_expected(original, field, value)
+    assert original.model_dump() == before
+
+
+@pytest.mark.parametrize("field,evidence,value", ALTERNATIVE_WRITES[-3:])
+def test_universal_total_guard_accepts_matching_totals_on_nonfinancial_proposals(
+    field, evidence, value
+):
+    original = saved()
+    message = "; ".join(part for part in (evidence, "invoice total €95") if part)
+    p = alternative_proposal(field, evidence, value)
+    updated = apply_proposal(original, p, message, expected_version=4, current_version=4)
+    assert updated.model_dump() == alternative_expected(original, field, value)
+
+
+def test_universal_total_guard_does_not_equate_a_tax_ambiguous_total_with_the_net_item_sum():
+    original = saved(vat_basis="exclusive")
+    before = original.model_dump()
+    message = "Use VAT 23%; invoice total €95"
+    p = alternative_proposal("vat_rate", "Use VAT 23%", "23")
+    with pytest.raises(ValueError):
+        apply_proposal(original, p, message)
+    assert original.model_dump() == before

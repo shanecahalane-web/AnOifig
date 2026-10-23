@@ -451,6 +451,128 @@ Both reported P2 interpretations are rejected within the supported grammar and
 the corrections are prepared for independent re-verification. This is not a
 staging or production approval. The limitations below remain applicable.
 
+## Shared assertion boundaries, 23 October 2026
+
+The independent review of `97d5a24e6cbc728e7d15034bc1043b1af9057deb` found
+three P2 defects in the two earlier review areas. `total for all the items` could
+still justify a selected line's price; a bulleted VAT answer lost its question
+heading; and historical VAT scope suppressed a later explicit current-invoice
+contradiction. The exact review examples and adjacent variations now reject
+without changing preparation notes or version, without `notes_merged` or a success
+acknowledgement, and with one controlled clarification.
+
+| Reviewed reproduction | Proposed mutation | Corrected result |
+| --- | --- | --- |
+| Saved valves `3 × €25`, elbows `2 × €10`; `Change valves so the total for all the items is €90.` | Valves unit price `30` | Reject; both complete saved items and version unchanged |
+| Saved VAT `exclusive / 13.5`; `Which VAT treatment applies?` followed by `- VAT 23%` on the next line | VAT rate `23` | Reject; complete saved notes and version unchanged |
+| Saved VAT `exclusive / 13.5`; `Use VAT 23%; the old invoice is exempt, but this invoice is VAT 0%.` | VAT rate `23` | Reject the two current rates; historical exemption does not hide the contradiction |
+| Same saved VAT; `Use including VAT; the old invoice is VAT exempt, but this invoice is excluding VAT.` | VAT basis `inclusive` | Reject the two current bases; complete saved notes and version unchanged |
+
+The signed-ingress tests run the existing worker using the actual restricted
+PostgreSQL role. Each rejection checks the saved notes, version and pending
+clarification, the durable run's null action and invalid-response error, and one
+outbound controlled clarification. Representative cases additionally check the
+other tenant's complete state and raw RLS denial. Positive controls verify exact
+saved values, successful action and outbound acknowledgement.
+
+### Root cause and structural correction
+
+Financial scope previously fell back to line scope when a collective target was
+not recognised. The revised `FinancialEvidence` retains value, role, scope, source
+expression/global offsets, selected identity and an `AssertionContext`. The same
+classified evidence is used by scalar, quantity, literal-price, exact-product
+and final-state checks. Collective targets compose their parts; unsupported wider
+scope stays ambiguous rather than licensing an allocation. A standalone total
+without an item target applies to the complete result. Unit prices, item-bound
+line/overall totals and exact products retain positive controls; no division or
+rounding is introduced.
+
+`assertions.py` is a small pure shared module for source context, not a general
+language parser. Intent (affirmative/question/option/negated/conditional/ambiguous)
+is separate from current/historical document scope. Source offsets and heading
+identity survive list formatting, semicolons, indentation and blank lines.
+Historical document headings also retain scope over their listed facts. Explicit
+current-document instructions restore current scope; completed historical facts
+and unrelated questions remain independent. Only a genuinely current affirmative
+can supply an update, and all affirmative current facts remain conflict-checked.
+Exemption, zero-rating, no-VAT, numeric zero-percent and pricing basis stay distinct.
+
+The previous invoice consistency check was conditional on the proposal mechanism.
+Every structured proposal now ends at `_validate_final_state`: initial/replacement
+lists, numeric and description-only patches, scalar, VAT, text and empty proposals
+share that boundary. It validates the complete message and complete candidate,
+checks known-item facts, aggregate totals and contradictory scalar/VAT assertions,
+and preserves captured old/new selectors across renames. Existing overlapping
+scalar notes are allowed when no current total requires reconciliation; an
+aggregate scalar cannot conceal inconsistent detailed items. Application-owned
+reset/expiry commands remain separate exact conversation controls. The sole worker
+proposal path still persists only after validation succeeds.
+
+See [ADR 0008](../adr/0008-tara-assertion-boundaries.md) for data flow, safety
+invariants, compatibility and the bounded grammar. Prompt v6 describes the same
+question/list and historical/current boundary. No dependency, database migration,
+grant/RLS, queue, provider-process or marketing change is introduced by this fix.
+
+### Regressions and before/after evidence
+
+The initial tests-first commit is `c9c99578b530f8426368839f22779ac80dbd3ed5`.
+Final additions comprise **373 cases**: **268 unit** cases in five new modules and
+**105 signed-ingress/restricted-role PostgreSQL** cases in two new modules. They
+cover all reviewed failures, initial/replace/price/quantity-only paths, all other
+proposal mechanisms, complete saved fields/versions, one durable clarification,
+run action/error metadata, positive behaviour and representative full-state/raw
+cross-tenant read/write denial. All original **1,872 tests** and their assertions
+remain unchanged, giving **2,245 tests**.
+
+An initial new persistence helper incorrectly selected a nonexistent state `id`.
+It was corrected to select the actual `conversation_id` before final comparison;
+intermediate counts from that helper were discarded. No original assertion was
+removed or weakened.
+
+The final **341 behavioural regressions** were copied unchanged into a pristine
+archive of `97d5a24`. All 39 source files were checked byte-for-byte against Git,
+and the imported schema path was asserted. The same locked environment and a
+separate disposable database produced **228 failed / 113 passed in 70.19s**.
+Failures include unsafe acceptance and supported-boundary expectations, not 228
+distinct defects. The remaining **32 direct typed-context contract tests** concern
+a new API absent from that implementation; they are excluded from the before run
+rather than counting import failures as defect evidence.
+
+| Validation | Result |
+| --- | --- |
+| Full Python/PostgreSQL suite with separate owner/runtime roles | 2,245 passed, no skips, in 350.73s |
+| New signed-ingress/RLS modules | 92 + 13 passed in focused runs; all 105 also included in the full suite |
+| Ruff lint / formatting / strict Mypy / Bandit | Passed; 113 Python files formatted, 40 source files type-checked |
+| Frozen dependencies / locked audit | Passed; 72 packages, no known vulnerabilities/adverse statuses |
+| PostgreSQL security, migrations and grant checks | Included in the complete suite; existing files unchanged |
+| Docker runtime/development and in-container regressions | Fresh builds; all 373 new cases passed in 70.85s; UID 10001 and live/ready HTTP 200; original three rejected and explicit-unit positive accepted |
+| GitHub Actions | Final published-head run and completed log results recorded in PR #4 |
+
+Reproduce with dedicated disposable owner/runtime connections:
+
+```sh
+uv sync --frozen
+uv run --frozen pytest -ra
+uv run --frozen ruff check .
+uv run --frozen ruff format --check .
+uv run --frozen mypy src
+uv run --frozen bandit -r src -q
+uv audit --locked
+```
+
+For before comparison, archive `97d5a24`, copy the six behavioural test modules,
+set `PYTHONPATH` to the archived `src`, assert its import path and source bytes,
+and use a separate disposable database. Exclude the two direct metadata test
+functions in `test_tara_document_headings.py` (three parametrized cases), and do
+not copy `test_tara_assertion_context.py`; those 32 cases require the new API.
+
+The final boundary enforces safe evidence and state consistency for supported
+roles; it does not prove complete extraction of arbitrary prose. Unrecognised or
+ambiguous scope, allocations, unsupported arithmetic and unresolved current facts
+require clarification. These corrections are prepared for independent development
+merge review. Staging/provider/load validation and commercial production privacy,
+retention, tax and operational approvals remain separate.
+
 ## Operational changes and limitations
 
 No database migration, grant or RLS change is introduced by these corrections.

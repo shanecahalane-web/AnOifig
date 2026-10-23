@@ -71,7 +71,11 @@ def patch(message, value="30", *, field="unit_price", evidence=None):
 
 
 def assert_controlled_rejection(database, identifier, before):
-    state = next(row for row in rows(database, "tara_states") if row["id"] == before["id"])
+    state = next(
+        row
+        for row in rows(database, "tara_states")
+        if row["conversation_id"] == before["conversation_id"]
+    )
     assert state["notes"] == before["notes"]
     assert state["version"] == before["version"]
     assert state["pending_clarification"] == before["pending_clarification"]
@@ -304,3 +308,77 @@ def test_assertion_rejections_preserve_tenant_b_and_retain_raw_rls_enforcement(
         )
         == other
     )
+
+
+ALTERNATIVE_WRITES = [
+    ("amount", "Set amount €90", "90"),
+    ("labour", "Labour €50", "50"),
+    ("materials", "Materials €40", "40"),
+    ("vat_rate", "Use VAT 23%", "23"),
+    ("vat_basis", "Use including VAT", "inclusive"),
+    ("customer_name", "Set customer name Jack", "Jack"),
+    ("description", "Rename valves to valve assemblies", "valve assemblies"),
+    ("empty", "", None),
+]
+
+
+def alternative_proposal(field, evidence, value):
+    if field == "description":
+        return patch(evidence, value, field="description")
+    if field == "empty":
+        return proposal([])
+    return proposal([change(field, value, evidence)])
+
+
+@pytest.mark.parametrize("field,evidence,value", ALTERNATIVE_WRITES)
+def test_universal_total_guard_rejects_all_alternative_write_paths_before_persisting(
+    field, evidence, value, messaging_client, database, seed, bearer
+):
+    worker, ai = establish(messaging_client, database, seed, bearer)
+    if field.startswith("vat_"):
+        set_vat(worker, ai, messaging_client)
+    before = rows(database, "tara_states")[0]
+    message = "; ".join(part for part in (evidence, "invoice total €90") if part)
+    ai.results.append(alternative_proposal(field, evidence, value))
+    identifier = accept(messaging_client, message)
+    assert worker.process_delivery(identifier)
+    assert_controlled_rejection(database, identifier, before)
+
+
+@pytest.mark.parametrize(
+    "field,evidence,value",
+    [
+        entry
+        for entry in ALTERNATIVE_WRITES
+        if entry[0] in {"amount", "labour", "vat_rate", "vat_basis"}
+    ],
+)
+def test_universal_total_guard_preserves_supported_scalar_and_vat_writes_without_a_total(
+    field, evidence, value, messaging_client, database, seed, bearer
+):
+    worker, ai = establish(messaging_client, database, seed, bearer)
+    if field.startswith("vat_"):
+        set_vat(worker, ai, messaging_client)
+    before = rows(database, "tara_states")[0]
+    ai.results.append(alternative_proposal(field, evidence, value))
+    identifier = accept(messaging_client, evidence)
+    assert worker.process_delivery(identifier)
+    assert_accepted(database, identifier, before, {**before["notes"], field: value})
+
+
+@pytest.mark.parametrize("field,evidence,value", ALTERNATIVE_WRITES[-3:])
+def test_universal_total_guard_allows_matching_totals_with_nonfinancial_proposals(
+    field, evidence, value, messaging_client, database, seed, bearer
+):
+    worker, ai = establish(messaging_client, database, seed, bearer)
+    before = rows(database, "tara_states")[0]
+    message = "; ".join(part for part in (evidence, "invoice total €95") if part)
+    ai.results.append(alternative_proposal(field, evidence, value))
+    identifier = accept(messaging_client, message)
+    assert worker.process_delivery(identifier)
+    expected = deepcopy(before["notes"])
+    if field == "description":
+        expected["line_items"][0]["description"] = value
+    elif field != "empty":
+        expected[field] = value
+    assert_accepted(database, identifier, before, expected)

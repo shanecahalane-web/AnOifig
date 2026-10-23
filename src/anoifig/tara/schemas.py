@@ -10,18 +10,26 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from anoifig.tara.assertions import (
+    AssertionContext,
+    AssertionIntent,
+    DocumentScope,
+    assertion_context,
+)
 from anoifig.tara.financial import (
+    FinancialItemState,
+    FinancialState,
     clauses,
     expression_context_safe,
     financial_negative_clause,
     inherited_negative,
-    invoice_total_matches,
     item_clauses,
     line_total_matches,
     negative_clause,
     nonassertive_expression,
     numeric_evidence,
     unit_price_evidence,
+    validate_final_financial_state,
 )
 from anoifig.tara.financial import (
     evidence_spans as _evidence_spans,
@@ -196,31 +204,11 @@ class VatAssertion:
     end: int
     kind: VatTreatmentKind
     rate: Decimal | None
-    current: bool
+    context: AssertionContext
 
 
-def _current_vat_context(message: str, start: int, *, bare_rate: bool = False) -> bool:
-    context = re.split(r"[;\n!?]|\.(?=\s|$)", message[:start])[-1]
-    # An explicitly different historical document is not this preparation's tax
-    # instruction. Unqualified statements stay in the current scope regardless
-    # of commas, conjunctions, newlines or semicolons.
-    if re.search(r"\b(?:old|previous|earlier|last)\s+(?:job|invoice|bill)\b", context, re.I):
-        return False
-    return not (
-        bare_rate
-        and re.search(
-            r"\b(?:discount|deposit|retention|interest|margin|markup|tip)\b", context, re.I
-        )
-    )
-
-
-def _vat_treatment_alternatives(message: str) -> bool:
-    """A textual treatment can be the other side of a numeric VAT choice.
-
-    Recognising an expression here never maps exemption, zero rating or a rate
-    to each other. It only prevents either side of an unresolved choice from
-    being accepted as an affirmative instruction.
-    """
+def vat_assertions(message: str) -> list[VatAssertion]:
+    """Retain each distinct treatment's source span, intent and document scope."""
     number = r"[0-9]+(?:\.[0-9]+)?"
     percent = r"(?:%|per\s*cent\b|percent\b)"
     treatments: list[VatAssertion] = []
@@ -236,24 +224,66 @@ def _vat_treatment_alternatives(message: str) -> bool:
         re.I,
     ):
         if match.lastgroup is None:
-            return True
+            continue
         kind = VatTreatmentKind(match.lastgroup)
         numeric = re.search(number, match.group()) if kind == VatTreatmentKind.RATE else None
+        context = assertion_context(message, match.start(), match.end(), topic="vat")
+        # Separately labelled percentages are not VAT facts. This filtering is
+        # independent of the document scope of the remaining VAT assertions.
+        if (
+            kind == VatTreatmentKind.RATE
+            and re.search(r"\bvat\b", match.group(), re.I) is None
+            and re.search(
+                r"\b(?:discount|deposit|retention|interest|margin|markup|tip)\b",
+                message[context.clause_start : match.start()],
+                re.I,
+            )
+        ):
+            continue
         treatments.append(
             VatAssertion(
                 match.start(),
                 match.end(),
                 kind,
                 Decimal(numeric.group()) if numeric else None,
-                _current_vat_context(
-                    message,
-                    match.start(),
-                    bare_rate=kind == VatTreatmentKind.RATE
-                    and re.search(r"\bvat\b", match.group(), re.I) is None,
-                ),
+                context,
             )
         )
-    current = [assertion for assertion in treatments if assertion.current]
+    return treatments
+
+
+def current_vat_assertions(message: str) -> list[VatAssertion]:
+    """Retain current facts and unresolved choices after scoped heading resets.
+
+    An explicit current-document statement can end an earlier options heading.
+    It cannot replace another affirmative current fact: those all remain here.
+    """
+    current = [
+        assertion
+        for assertion in vat_assertions(message)
+        if assertion.context.document_scope == DocumentScope.CURRENT
+    ]
+    return [
+        assertion
+        for assertion in current
+        if not (
+            assertion.context.heading_start is not None
+            and assertion.context.intent in {AssertionIntent.QUESTION, AssertionIntent.OPTION}
+            and any(
+                later.start > assertion.end
+                and later.context.heading_start is None
+                and later.context.intent == AssertionIntent.AFFIRMATIVE
+                for later in current
+            )
+        )
+    ]
+
+
+def _vat_treatment_alternatives(message: str) -> bool:
+    """Reject current unresolved treatments without mapping their tax meanings."""
+    current = current_vat_assertions(message)
+    if any(assertion.context.intent != AssertionIntent.AFFIRMATIVE for assertion in current):
+        return True
     facts = {(assertion.kind, assertion.rate) for assertion in current}
     rates = {value for kind, value in facts if kind == VatTreatmentKind.RATE}
     bases = {
@@ -268,23 +298,13 @@ def _vat_treatment_alternatives(message: str) -> bool:
     }
     if len(rates) > 1 or len(bases) > 1 or treatments_without_rate and len(facts) > 1:
         return True
-    heading_pattern = (
-        r"(?:^|[;\n.!?])\s*(?:(?:vat\s+)?(?:options?|choices?|alternatives?)(?:\s+for\s+vat)?|"
-        r"(?:choose|select)(?:\s+(?:one|vat(?:\s+(?:treatment|rate))?))?|either)\s*:|"
-        r"(?:^|[;\n.!?])\s*(?:what|which|should|could|would|is|are)\b[^;\n.!?]*\bvat\b"
-        r"[^;\n.!?]*[?:]\s*$"
-    )
-    # A compatible earlier assertion cannot turn a later question or option
-    # heading into an affirmative instruction for the following VAT assertion.
-    if any(re.search(heading_pattern, message[: assertion.start], re.I) for assertion in current):
-        return True
     alternative = (
         r"\bor\b|\bversus\b|\bvs\.?\b|/|\balternatively\b|"
         r"\binstead\s+of\b|\brather\s+than\b"
     )
     boundary = r"[;\n!?]|\.(?=\s|$)"
 
-    for left, right in zip(treatments, treatments[1:], strict=False):
+    for left, right in zip(current, current[1:], strict=False):
         bridge = message[left.end : right.start]
         parts = re.split(boundary, bridge)
         # Connectors on either side of formatting punctuation retain the choice.
@@ -326,10 +346,19 @@ def vat_evidence(
     ):
         return False
     supported: set[str] = set()
+    active = current_vat_assertions(evidence)
     for basis, pattern in patterns.items():
         for match in re.finditer(pattern, evidence, re.I):
-            if not _current_vat_context(evidence, match.start()):
+            context = assertion_context(evidence, match.start(), match.end(), topic="vat")
+            if context.document_scope == DocumentScope.HISTORICAL:
                 continue
+            if not any(part.start <= match.start() and match.end() <= part.end for part in active):
+                continue
+            if (
+                context.document_scope != DocumentScope.CURRENT
+                or context.intent != AssertionIntent.AFFIRMATIVE
+            ):
+                return False
             clause = next(
                 (
                     part
@@ -343,7 +372,6 @@ def vat_evidence(
             assertion = evidence[clause.start : match.start()] + evidence[match.end() : clause.end]
             if (
                 negative_clause(assertion)
-                or inherited_negative(evidence, clause)
                 or re.search(r"\bor\b", clause.text, re.I)
                 or nonassertive_expression(evidence, clause, match.start(), match.end())
             ):
@@ -383,11 +411,20 @@ def _vat_rate_evidence(
     spans = _evidence_spans(message, evidence)
     rates: set[Decimal] = set()
     grounded = False
+    active = current_vat_assertions(message)
     for pattern in patterns:
         for match in re.finditer(pattern, message, re.I):
             start, end = match.span("rate")
-            if not _current_vat_context(message, match.start()):
+            context = assertion_context(message, match.start(), match.end(), topic="vat")
+            if context.document_scope == DocumentScope.HISTORICAL:
                 continue
+            if not any(part.start <= start and end <= part.end for part in active):
+                continue
+            if (
+                context.document_scope != DocumentScope.CURRENT
+                or context.intent != AssertionIntent.AFFIRMATIVE
+            ):
+                return False
             clause = next(
                 (
                     part
@@ -399,7 +436,6 @@ def _vat_rate_evidence(
             if (
                 clause is None
                 or negative_clause(clause.text)
-                or inherited_negative(message, clause)
                 or nonassertive_expression(message, clause, match.start(), match.end())
                 or re.search(r"(?:€|\b(?:EUR|euros?))\s*$", message[:start], re.I)
                 or re.match(rf"\s*(?:{percent}\s*)?(?:€|(?:EUR|euros?|e)\b)", message[end:], re.I)
@@ -527,6 +563,39 @@ def _patch_line_items(notes: InvoiceNotes, proposal: ProposedNotes, message: str
     return items
 
 
+def _validate_final_state(
+    before: InvoiceNotes, final: InvoiceNotes, proposal: ProposedNotes, message: str
+) -> None:
+    """Every structured mutation validates the same complete source and result.
+
+    Selective renames retain their captured source identity. Replacements have
+    new identities and cannot borrow evidence from the discarded item list.
+    """
+    validate_final_financial_state(
+        message,
+        FinancialState(
+            items=tuple(
+                FinancialItemState(
+                    identity=index,
+                    description=item.description,
+                    quantity=money(item.quantity),
+                    unit_price=money(item.unit_price),
+                    source_descriptions=(before.line_items[index].description,)
+                    if proposal.line_items is None and index < len(before.line_items)
+                    else (),
+                )
+                for index, item in enumerate(final.line_items)
+            ),
+            vat_basis=final.vat_basis,
+            amount=money(final.amount) if final.amount is not None else None,
+            labour=money(final.labour) if final.labour is not None else None,
+            materials=money(final.materials) if final.materials is not None else None,
+        ),
+    )
+    if _vat_treatment_alternatives(message):
+        raise ValueError("ambiguous current VAT assertions")
+
+
 def apply_proposal(
     notes: InvoiceNotes,
     proposal: ProposedNotes,
@@ -621,25 +690,7 @@ def apply_proposal(
             item.model_dump() for item in _patch_line_items(notes, proposal, message)
         ]
     updated = InvoiceNotes.model_validate(values)
-    if proposal.line_items is not None or any(
-        change.field in {"quantity", "unit_price"}
-        for patch in proposal.line_item_patches
-        for change in patch.changes
-    ):
-        # A stated unit price may coexist with an invoice total, but that total
-        # cannot be used as one line's product or silently allocate a difference.
-        total = None
-        if updated.vat_basis == "no_vat" and all(
-            value is None for value in (updated.amount, updated.labour, updated.materials)
-        ):
-            total = sum(
-                (money(item.quantity) * money(item.unit_price) for item in updated.line_items),
-                Decimal(0),
-            )
-        if not invoice_total_matches(
-            message, total, item_descriptions=tuple(item.description for item in updated.line_items)
-        ):
-            raise ValueError("inconsistent or ambiguous invoice total")
+    _validate_final_state(notes, updated, proposal, message)
     return updated
 
 
