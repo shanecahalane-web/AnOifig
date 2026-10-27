@@ -579,7 +579,10 @@ def _validate_final_state(
     Selective renames retain their captured source identity. Replacements have
     new identities and cannot borrow evidence from the discarded item list.
     """
-    targets = [MutationTarget(change.field) for change in proposal.changes]
+    targets = [
+        MutationTarget(change.field, applies_to_all_items=change.field in {"vat_basis", "vat_rate"})
+        for change in proposal.changes
+    ]
     for patch in proposal.line_item_patches:
         aliases = (patch.description, final.line_items[patch.index].description)
         targets.extend(MutationTarget(change.field, aliases) for change in patch.changes)

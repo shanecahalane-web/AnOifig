@@ -94,3 +94,17 @@ def test_other_item_preservation_with_document_reference_does_not_cancel_selecte
     expected = original.model_dump()
     expected["line_items"][0]["unit_price"] = "30"
     assert updated.model_dump() == expected
+
+
+@pytest.mark.parametrize(
+    "field,value,assertion",
+    [
+        ("vat_rate", "23", "VAT 23%"),
+        ("vat_basis", "inclusive", "including VAT"),
+    ],
+)
+def test_question_punctuation_retains_heading_intent_without_an_interrogative_word(
+    field, value, assertion
+):
+    message = "VAT on this invoice?\n- " + assertion
+    reject(saved(vat=True), proposed((field, value, assertion)), message)

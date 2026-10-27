@@ -186,3 +186,39 @@ def test_customer_question_does_not_confirm_a_listed_name(
     identifier = accept(messaging_client, message)
     assert worker.process_delivery(identifier)
     assert_rejected(worker, ai, database, identifier, before)
+
+
+@pytest.mark.parametrize(
+    "field,value,evidence",
+    [
+        ("vat_rate", "23", "Use VAT 23%"),
+        ("vat_basis", "inclusive", "Use including VAT"),
+    ],
+)
+def test_preserving_an_items_vat_vetoes_global_vat_changes(
+    field, value, evidence, messaging_client, database, seed, bearer
+):
+    worker, ai = establish_complete(messaging_client, database, seed, bearer, vat=True)
+    before = saved_state(database)
+    ai.results.append(proposal([change(field, value, evidence)]))
+    identifier = accept(messaging_client, evidence + "; keep valves VAT unchanged.")
+    assert worker.process_delivery(identifier)
+    assert_rejected(worker, ai, database, identifier, before)
+
+
+@pytest.mark.parametrize(
+    "field,value,assertion",
+    [
+        ("vat_rate", "23", "VAT 23%"),
+        ("vat_basis", "inclusive", "including VAT"),
+    ],
+)
+def test_question_mark_on_a_topic_heading_preserves_complete_vat_state(
+    field, value, assertion, messaging_client, database, seed, bearer
+):
+    worker, ai = establish_complete(messaging_client, database, seed, bearer, vat=True)
+    before = saved_state(database)
+    ai.results.append(proposal([change(field, value, assertion)]))
+    identifier = accept(messaging_client, "VAT on this invoice?\n- " + assertion)
+    assert worker.process_delivery(identifier)
+    assert_rejected(worker, ai, database, identifier, before)

@@ -109,7 +109,9 @@ def _listed_segment(message: str, start: int, end: int) -> bool:
     )
 
 
-def _heading_intent(text: str, topic: AssertionTopic) -> AssertionIntent | None:
+def _heading_intent(
+    text: str, topic: AssertionTopic, *, question_mark: bool = False
+) -> AssertionIntent | None:
     content = _presented(text).strip().rstrip(":").strip()
     if topic == "financial" and re.search(r"\bvat\b", content, re.I):
         return None
@@ -127,7 +129,9 @@ def _heading_intent(text: str, topic: AssertionTopic) -> AssertionIntent | None:
         if topic == "text"
         else r"\b(?:vat|amount|charge|price|cost|total|labou?r|materials?|quantity|qty|unit)\b"
     )
-    if _question_head(content) and (topic == "text" or re.search(subject, content, re.I)):
+    if (question_mark or _question_head(content)) and (
+        topic == "text" or re.search(subject, content, re.I)
+    ):
         return AssertionIntent.QUESTION
     return None
 
@@ -288,7 +292,7 @@ def assertion_context(
         if boundary.start() > start:
             break
         segment = message[segment_start : boundary.start()]
-        candidate = _heading_intent(segment, topic)
+        candidate = _heading_intent(segment, topic, question_mark=boundary.group() == "?")
         segment_document = _document_scope(segment)
         independent_current = (
             segment_document == DocumentScope.CURRENT
@@ -352,6 +356,7 @@ class MutationTarget:
 
     field: str
     item_names: tuple[str, ...] = ()
+    applies_to_all_items: bool = False
 
 
 @dataclass(frozen=True)
@@ -366,7 +371,11 @@ class MutationConstraint:
         if self.whole_document:
             return True
         if self.item_names:
-            return bool(self.item_names & {name.casefold() for name in target.item_names})
+            return (
+                target.applies_to_all_items
+                and target.field in self.fields
+                or bool(self.item_names & {name.casefold() for name in target.item_names})
+            )
         if self.item_reference:
             return bool(target.item_names)
         return not self.fields or target.field in self.fields

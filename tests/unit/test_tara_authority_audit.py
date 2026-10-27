@@ -170,3 +170,20 @@ def test_independent_explicit_customer_instruction_can_follow_a_social_question(
         **notes.model_dump(),
         "customer_name": "Jack",
     }
+
+
+@pytest.mark.parametrize(
+    "field,value,evidence",
+    [
+        ("vat_rate", "23", "Use VAT 23%"),
+        ("vat_basis", "inclusive", "Use including VAT"),
+    ],
+)
+def test_item_vat_preservation_constrains_a_global_vat_mutation(field, value, evidence):
+    notes = InvoiceNotes(vat_basis="exclusive", vat_rate="13.5", line_items=ITEMS)
+    before = notes.model_dump()
+    with pytest.raises(ValueError):
+        apply_proposal(
+            notes, proposal(field, value, evidence), evidence + "; keep valves VAT unchanged."
+        )
+    assert notes.model_dump() == before

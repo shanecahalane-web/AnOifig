@@ -52,6 +52,8 @@ unresolved or document-wide veto constrains the entire proposal. An instruction
 to keep a different item unchanged remains compatible with a selected-item
 correction. Renames retain old/new selectors. Field-owned text remains data;
 independent cancellation clauses are still checked.
+Application-owned targets also retain whether their field applies to all items:
+preserving one item's VAT therefore constrains the shared invoice VAT fields.
 
 Every proposal still constructs a local candidate and passes the existing single
 final-state boundary before persistence. The boundary now checks mutation
