@@ -614,3 +614,144 @@ resolution; application send ordering does not guarantee mobile-network arrival
 order. See [ADR 0007](../adr/0007-tara-evidence-and-provider-isolation.md), the
 [Tara runbook](../runbooks/tara.md) and the
 [retention design](../retention-and-deletion.md).
+
+## Six P2 mutation-authority corrections, 27 October 2026
+
+This correction implements the six findings from the independent review of
+`daded2df3e3e0cc2004d1e4aa385955e368d5a76` on the existing Milestone 3 branch.
+The common failure was accepting literal evidence without sufficient authority
+for its field, item scope or complete-message intent. See
+[ADR 0009](../adr/0009-tara-mutation-authority.md) for the shared typed boundary.
+
+### Before/after reproductions
+
+All rejection checks compare the complete previously saved notes and version,
+null successful action, one exact application-controlled clarification and one
+outbox. They also repeat the inbound processing and require no second AI call or
+reply. The model remains a scripted adversarial proposal source; the real signed
+ingress, worker, transactions, authorisation and restricted-role PostgreSQL run.
+
+| Finding / reviewed input | Reviewed implementation | Corrected result |
+| --- | --- | --- |
+| Saved amount/labour/materials `600/400/200`; `The address is 25 Main Street`, `Invoice reference 500`, `There are 3 valves`, `The job took 8 hours` | A unique unrelated number can replace any scalar charge | Reject; all financial and text notes/version preserved; recognised financial shorthand remains supported |
+| Valves `3 × 25`, elbows `2 × 10`; `Change valves so the total for everything is €90`, propose valves price `30` | Saves item sum `110` despite the collective target `90` | Reject without allocation; combined/joint, complete-order, lot, unknown and postfix targets retain wider/ambiguous scope |
+| VAT `exclusive / 13.5`; `*Which VAT treatment applies?*` then `- VAT 23%` | Saves rate `23` and acknowledges success | Reject; emphasis, headings, quotes and lists retain question/option intent for rate and basis |
+| `Use VAT 23%; the old invoice is exempt, but now use VAT 0%` | Saves `23` while suppressing the contradictory current assertion | Reject; current temporal/pronominal clauses conflict-check together, while quoted/reported historical instructions remain historical |
+| `Change valves unit price €30; do not make this change` or `Set amount €500; no, cancel that` | Saves the earlier financial change | Reject through complete-message constraints, including non-numeric vetoes and item/global VAT preservation; preserve-other-item controls still pass |
+| `Do not change customer name to Jack`, negated work/contact changes, or a historical customer value | Substring grounding can save the rejected/historical value | Require affirmative current authority for the matching field; contradictory explicit/implicit customers reject; field-owned company/work/address words remain data |
+
+Meaningful adjacent controls include EUR-qualified reference numbers, hourly rates
+versus whole charges, Labour/Materials total/price labels, cross-field number and
+text borrowing, quoted old-document instructions, generic text-question headings,
+rename vetoes, cancellation modifiers, and mixed valid/invalid proposals. A
+listed customer suggestion cannot become confirmation when the customer is
+missing; an independent explicit customer instruction can follow a social question.
+No new division, rounding, allocation or tax inference is introduced. A question mark itself retains heading intent even without an interrogative word; application-owned global VAT scope cannot evade an item-specific VAT veto.
+
+### Tests-first evidence and retained assertions
+
+Tests-first commit `99af6aac970ec0d7ab28f38345a76b4e27c334b5` adds the first
+235 cases before production edits: 107 unit and 128 signed-ingress PostgreSQL
+cases. On unchanged reviewed source these produced **180 failed / 55 passed**.
+The earlier independent 69-case harness also reconfirmed all six findings before
+implementation: 41 failures and 28 passes, including its raw isolation check.
+
+Supplemental behavioural cases use a pristine `git archive` of the reviewed
+commit. All 40 archived source files were compared byte-for-byte with their Git
+objects and the imported schema path was asserted. Separate disposable databases
+prevent before/after state sharing. Final domain regressions total **334**:
+
+| New module | Cases | Reviewed-source result |
+| --- | ---: | --- |
+| `test_tara_review_authority.py` | 107 | 79 failed / 28 passed |
+| `test_tara_authority_persistence.py` | 128 | 101 failed / 27 passed |
+| `test_tara_authority_variants.py` | 30 | 20 failed / 10 passed |
+| `test_tara_authority_variants_persistence.py` | 36 | 26 failed / 10 passed |
+| `test_tara_authority_audit.py` | 33 | 18 failed / 15 passed |
+| Domain total | **334** | **244 failed / 90 passed** |
+
+Failures include supported-boundary expectations as well as unsafe acceptances;
+they are not counts of distinct defects. Four additional provider-harness controls
+fail against the original helper and pass with its test-only correction. Thus
+**338 new cases** extend the retained **2,245**, giving **2,583** cases. Every one
+of the 44 pre-existing unit/integration/scenario files is byte-identical to the
+reviewed commit. Original provider assertion modules and parent helper are also
+unchanged. The child fault-injection helper changes as documented below.
+
+### Provider test resolution
+
+The outstanding two-second DNS failure was reproduced and measured. A numeric-IP
+ambient proxy can bypass the mocked resolver; cold SDK import plus strict-schema
+setup also delayed DNS entry to approximately 1.98 seconds. The production parent
+still stopped its child around 2.006 seconds. No production provider defect was
+confirmed and no production provider file changed.
+
+The DNS-only fault transport now uses a deterministic invalid-host proxy and a
+minimal real SDK request through the actual HTTPX resolver and teardown. Full
+strict-tool serialization/parsing remains covered by the original component and
+isolated-success tests. Separate setup-stall cases prove that startup is inside
+the same deadline, including SIGTERM resistance. No timeout or original assertion
+was increased or removed. The [full investigation](03-tara-provider-deadline.md)
+records cold/warm measurements and commands.
+
+### Final validation
+
+| Check | Result |
+| --- | --- |
+| Frozen dependency sync | Passed; locked dependencies unchanged |
+| Full corrected suite with separate owner/runtime PostgreSQL 17 roles | 2,583 passed; no skips; 305.64s (Python 3.13.5/PostgreSQL 17.11) |
+| New domain and provider controls | All 338 included in the complete suite |
+| Ruff lint / format | Passed; 121 Python files formatted |
+| Strict Mypy / Bandit | Passed; 40 source files; no security-pattern findings |
+| Locked dependency audit | Passed; 72 packages, no known vulnerabilities/adverse statuses |
+| Existing security, migrations, concurrency, stale results and messaging recovery | Included in complete suite; no assertion changes |
+| Final runtime / development Docker builds | Passed with TLS verification and the combined CA secret |
+| Final packaged provider suite, network disabled and two-second DNS selected first | 74 passed in 26.49s |
+| Final packaged domain, conversation, raw RLS and boundary-migration selection | 417 passed in 84.12s |
+| Runtime image | UID 10001; live/ready HTTP 200; all 40 source hashes/lock match; invalid isolated-launcher input rejected privately |
+| GitHub Actions | Exact final published-head run and result recorded in PR #4 |
+
+The first full correction run caught four compatibility regressions in original
+scenarios (bare corrections, `Materials were ... actually`, and colon-separated
+customer/work introductions); these were corrected without altering assertions.
+A later run had two failures and one setup error caused by database connection
+losses around a Docker network change, with no PostgreSQL restart/OOM. It was
+repeated after networking stabilised. A stable intermediate run passed 2,570
+cases; five cross-field question controls then passed in a complete 2,575-case run; four item/global-VAT scope controls and four punctuation-led question controls were added and validated afterward. Obsolete intermediate Docker layers also exhausted local storage during validation; only those images and unused build cache were removed, preserving named images and database volumes. Interrupted checks were repeated. Only the final
+complete run and final-source Docker results above establish final validation.
+
+Reproduce with dedicated disposable owner/runtime URLs whose database names end
+in `_test`; never use customer databases:
+
+```sh
+uv sync --frozen
+uv run --frozen pytest -ra
+uv run --frozen ruff check .
+uv run --frozen ruff format --check .
+uv run --frozen mypy src
+uv run --frozen bandit -r src -q
+uv audit --locked
+```
+
+For a focused run, select the five domain modules listed above and
+`tests/unit/test_tara_provider_harness.py`. Integration modules require the real
+restricted runtime role and separate schema owner. For before comparison, copy
+only the new test modules into the pristine reviewed archive, select its `src`
+using `PYTHONPATH`, assert the import path/source bytes and use a separate
+disposable database. Provider controls require the original child helper for the
+before run, not the corrected helper.
+
+### Scope and readiness
+
+Production changes are limited to `assertions.py`, `financial.py`, `schemas.py`
+and prompt v7. The existing worker remains the sole transactional persistence
+boundary. No migrations, grants/RLS changes, messaging redesign, dependencies,
+invoice issuance, deployment or live-provider connection are introduced.
+
+No unresolved merge blocker was identified in the completed correction checks.
+Independent re-review requires green checks on the exact published head. PR #4
+records **READY FOR INDEPENDENT RE-REVIEW** only after that CI gate passes; this
+is not merge approval. A separate review must assess the corrected commit.
+The grammar remains bounded; these tests do not prove arbitrary-prose extraction,
+tax compliance or production readiness. Physical retention/subject-rights,
+vendor/privacy, tax, operational, staging/load and backup/restore gates remain.
