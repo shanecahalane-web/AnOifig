@@ -6,7 +6,7 @@ import unicodedata
 from dataclasses import dataclass
 from decimal import Decimal
 from enum import StrEnum
-from typing import Annotated, Literal
+from typing import Annotated, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -14,7 +14,11 @@ from anoifig.tara.assertions import (
     AssertionContext,
     AssertionIntent,
     DocumentScope,
+    MutationTarget,
+    TextField,
     assertion_context,
+    text_evidence,
+    validate_mutation_authority,
 )
 from anoifig.tara.financial import (
     FinancialItemState,
@@ -261,7 +265,7 @@ def current_vat_assertions(message: str) -> list[VatAssertion]:
     current = [
         assertion
         for assertion in vat_assertions(message)
-        if assertion.context.document_scope == DocumentScope.CURRENT
+        if assertion.context.document_scope != DocumentScope.HISTORICAL
     ]
     return [
         assertion
@@ -282,7 +286,11 @@ def current_vat_assertions(message: str) -> list[VatAssertion]:
 def _vat_treatment_alternatives(message: str) -> bool:
     """Reject current unresolved treatments without mapping their tax meanings."""
     current = current_vat_assertions(message)
-    if any(assertion.context.intent != AssertionIntent.AFFIRMATIVE for assertion in current):
+    if any(
+        assertion.context.intent != AssertionIntent.AFFIRMATIVE
+        or assertion.context.document_scope != DocumentScope.CURRENT
+        for assertion in current
+    ):
         return True
     facts = {(assertion.kind, assertion.rate) for assertion in current}
     rates = {value for kind, value in facts if kind == VatTreatmentKind.RATE}
@@ -571,6 +579,38 @@ def _validate_final_state(
     Selective renames retain their captured source identity. Replacements have
     new identities and cannot borrow evidence from the discarded item list.
     """
+    targets = [MutationTarget(change.field) for change in proposal.changes]
+    for patch in proposal.line_item_patches:
+        aliases = (patch.description, final.line_items[patch.index].description)
+        targets.extend(MutationTarget(change.field, aliases) for change in patch.changes)
+    if proposal.line_items is not None:
+        for item in final.line_items:
+            prior = next(
+                (
+                    old
+                    for old in before.line_items
+                    if old.description.casefold() == item.description.casefold()
+                ),
+                None,
+            )
+            targets.extend(
+                MutationTarget(field, (item.description,))
+                for field in ("description", "quantity", "unit_price")
+                if prior is None or getattr(prior, field) != getattr(item, field)
+            )
+        targets.extend(
+            MutationTarget("line_items", (item.description,))
+            for item in before.line_items
+            if not any(
+                new.description.casefold() == item.description.casefold()
+                for new in final.line_items
+            )
+        )
+    validate_mutation_authority(
+        message,
+        tuple(targets),
+        item_names=tuple(item.description for item in (*before.line_items, *final.line_items)),
+    )
     validate_final_financial_state(
         message,
         FinancialState(
@@ -636,8 +676,20 @@ def apply_proposal(
                 change.value, change.evidence, pending_clarification=pending_clarification
             ):
                 raise ValueError("ungrounded VAT basis")
-        elif change.value.casefold() not in change.evidence.casefold():
-            raise ValueError("ungrounded text")
+        elif not text_evidence(
+            cast(TextField, change.field),
+            change.value,
+            change.evidence,
+            message,
+            allow_bare=(
+                change.field == "customer_name"
+                and notes.customer_name is None
+                or change.field == "work_description"
+                and notes.customer_name is not None
+                and notes.work_description is None
+            ),
+        ):
+            raise ValueError("ungrounded or nonaffirmative text")
         values[change.field] = change.value
     if proposal.line_items is not None:
         if (

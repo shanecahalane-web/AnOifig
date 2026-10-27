@@ -29,17 +29,53 @@ emit(
     synthetic_ca_preserved=os.environ.get("SSL_CERT_FILE") == "/reviewed/ca.pem",
 )
 
+if scenario in {"startup", "startup_ignore_term"}:
+    # Setup is inside the real parent's unchanged elapsed-time deadline too.
+    if scenario == "startup_ignore_term":
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    emit("setup_started")
+    time.sleep(6)
+    emit("setup_finished")
+
 if scenario in {"dns", "dns_ignore_term"}:
     if scenario == "dns_ignore_term":
         signal.signal(signal.SIGTERM, signal.SIG_IGN)
 
     def stalled_resolver(*args, **kwargs):
-        emit("dns_started")
+        emit("dns_started", host=args[0].decode() if isinstance(args[0], bytes) else args[0])
         time.sleep(6)
         emit("dns_finished")
         return []  # No actual hostname lookup or connection.
 
     socket.getaddrinfo = stalled_resolver
+
+    import httpx
+    from openai import AsyncOpenAI
+
+    import anoifig.tara.provider_transport as transport
+
+    def resolver_client(**kwargs):
+        # Fault injection must reach a resolver even when the host's proxy is a
+        # numeric IP. This synthetic transport stays offline; production proxy
+        # and CA forwarding are covered by the separate environment assertions.
+        return AsyncOpenAI(
+            **kwargs,
+            http_client=httpx.AsyncClient(
+                proxy="http://tara-provider.invalid:8080", trust_env=False
+            ),
+        )
+
+    async def resolver_completion(self, client, request):
+        # Keep the actual SDK/HTTPX resolver and teardown, without spending this
+        # two-second fault test constructing unrelated strict tool schemas. The
+        # original component and isolated-success tests retain those assertions.
+        return await client.chat.completions.create(
+            model=self.configuration.model,
+            messages=[{"role": "user", "content": "offline resolver fault"}],
+        )
+
+    transport.AsyncOpenAI = resolver_client
+    transport.OpenAITransport._completion = resolver_completion
 elif scenario == "malformed":
     sys.stdout.write('{"private":"not a result"}')
     raise SystemExit(0)

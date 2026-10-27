@@ -8,7 +8,10 @@ amounts, tax treatments or corrections from prose.
 import re
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Literal
+from typing import Literal, cast
+
+AssertionTopic = Literal["financial", "vat", "text"]
+TextField = Literal["customer_name", "work_description", "customer_details"]
 
 
 class AssertionIntent(StrEnum):
@@ -44,7 +47,11 @@ _SOFT_BOUNDARY = re.compile(r",(?![0-9])|\b(?:and|but)\b", re.I)
 _DOCUMENT = re.compile(
     r"\b(?P<historical>old|previous|earlier|last)\s+(?:job|invoice|bill)\b|"
     r"\b(?P<current>this|current|new)\s+(?:job|invoice|bill)\b|"
-    r"\b(?:invoice|bill|job)\s+(?P<preparing>being\s+prepared)\b",
+    r"\b(?:invoice|bill|job)\s+(?P<preparing>being\s+prepared)\b|"
+    r"\b(?P<reference>this\s+one)\b|"
+    r"\b(?P<transition>(?:now|instead)\s+(?:please\s+)?"
+    r"(?:use|apply|set|make|change|charge|record|update))\b|"
+    r"\b(?P<unclear_transition>instead)(?!\s+of\b)\b",
     re.I,
 )
 _QUESTION = re.compile(
@@ -73,12 +80,16 @@ _AMBIGUOUS = re.compile(
 
 def _presented(text: str) -> str:
     """Inspect presentation markers without changing source coordinates."""
-    return re.sub(
-        r"^\s*[:;]*\s*(?:(?:[-*•+]|[0-9]+[.)]|[a-z][.)]|\([a-z0-9]+\))\s+)?",
-        "",
-        text,
-        flags=re.I,
+    result = text
+    prefix = (
+        r"^\s*[:;]*\s*(?:>\s*|\#{1,6}\s+|"
+        r"(?:[-*•+]|[0-9]+[.)]|[a-z][.)]|\([a-z0-9]+\))\s+)"
     )
+    while (stripped := re.sub(prefix, "", result, flags=re.I)) != result:
+        result = stripped
+    # Presentation is inspected only; all stored evidence and offsets continue
+    # to refer to the unchanged message. Wrappers cannot hide a question head.
+    return re.sub(r"[*_~`]+", "", result).strip()
 
 
 def _question_head(text: str) -> bool:
@@ -89,7 +100,8 @@ def _listed_segment(message: str, start: int, end: int) -> bool:
     line_start = max(message.rfind(mark, 0, start) for mark in ("\n", ";", "?")) + 1
     return (
         re.match(
-            r"^\s*:*\s*(?:[-*•+]|[0-9]+[.)]|[a-z][.)]|\([a-z0-9]+\))\s+",
+            r"^\s*[:*_~`]*\s*(?:>\s*|"
+            r"(?:[-*•+]|[0-9]+[.)]|[a-z][.)]|\([a-z0-9]+\))\s+)",
             message[line_start:end],
             re.I,
         )
@@ -97,7 +109,7 @@ def _listed_segment(message: str, start: int, end: int) -> bool:
     )
 
 
-def _heading_intent(text: str, topic: Literal["financial", "vat"]) -> AssertionIntent | None:
+def _heading_intent(text: str, topic: AssertionTopic) -> AssertionIntent | None:
     content = _presented(text).strip().rstrip(":").strip()
     if topic == "financial" and re.search(r"\bvat\b", content, re.I):
         return None
@@ -109,19 +121,23 @@ def _heading_intent(text: str, topic: Literal["financial", "vat"]) -> AssertionI
     ):
         return AssertionIntent.OPTION
     subject = (
-        r"\bvat\b"
+        r"\b(?:vat|tax|rate|treatment|basis|percentage|option)\b"
         if topic == "vat"
+        else r"\b(?:customer|client|name|work|description|contact|details|address|change)\b"
+        if topic == "text"
         else r"\b(?:vat|amount|charge|price|cost|total|labou?r|materials?|quantity|qty|unit)\b"
     )
-    if _question_head(content) and re.search(subject, content, re.I):
+    if _question_head(content) and (topic == "text" or re.search(subject, content, re.I)):
         return AssertionIntent.QUESTION
     return None
 
 
-def _topic_instruction(text: str, topic: Literal["financial", "vat"]) -> bool:
+def _topic_instruction(text: str, topic: AssertionTopic) -> bool:
     subject = (
         r"\bvat\b"
         if topic == "vat"
+        else r"\b(?:customer|client|name|work|description|contact|details|address)\b"
+        if topic == "text"
         else r"\b(?:amount|charge|price|cost|total|labou?r|materials?|quantity|qty|unit)\b|€"
     )
     if re.search(subject, text, re.I) is None:
@@ -143,7 +159,26 @@ def _document_scope(text: str) -> DocumentScope | None:
     documents = list(_DOCUMENT.finditer(text))
     if not documents:
         return None
-    return DocumentScope.HISTORICAL if documents[-1].group("historical") else DocumentScope.CURRENT
+    if documents[-1].group("historical"):
+        return DocumentScope.HISTORICAL
+    prior_historical = [document for document in documents[:-1] if document.group("historical")]
+    if prior_historical:
+        bridge = text[prior_historical[-1].end() : documents[-1].start()]
+        if re.search(
+            r'\b(?:says?|said|states?|stated|reads?|instruction|wording|quoted)\b|["“]',
+            bridge,
+            re.I,
+        ):
+            return DocumentScope.HISTORICAL
+    if any(
+        documents[-1].group(group) for group in ("reference", "transition", "unclear_transition")
+    ) and any(document.group("historical") for document in documents[:-1]):
+        # Commands reported within an old-document clause remain historical.
+        # Independent clauses receive their own source context from the caller.
+        return DocumentScope.HISTORICAL
+    if documents[-1].group("unclear_transition"):
+        return DocumentScope.AMBIGUOUS
+    return DocumentScope.CURRENT
 
 
 def _registration_facts(text: str, expression: str) -> str:
@@ -217,7 +252,7 @@ def assertion_context(
     start: int,
     end: int,
     *,
-    topic: Literal["financial", "vat"] = "financial",
+    topic: AssertionTopic = "financial",
 ) -> AssertionContext:
     """Classify a caller-recognised expression in its complete original input."""
     if not 0 <= start < end <= len(message):
@@ -285,7 +320,11 @@ def assertion_context(
         heading_start, heading_intent = statement_start, prefix_heading
     scoped_affirmative = (
         document == DocumentScope.CURRENT
-        and _document_scope(message[statement_start:statement_end]) == DocumentScope.CURRENT
+        and (
+            _document_scope(message[statement_start:statement_end]) == DocumentScope.CURRENT
+            or topic == "text"
+            and _RESET_VERB.match(_presented(message[statement_start:statement_end]))
+        )
         and intent == AssertionIntent.AFFIRMATIVE
         and _topic_instruction(message[statement_start:statement_end], topic)
         and not _listed_segment(message, statement_start, statement_end)
@@ -305,3 +344,304 @@ def assertion_context(
         heading_start,
         document_heading_start,
     )
+
+
+@dataclass(frozen=True)
+class MutationTarget:
+    """Application-selected field and captured item aliases, never model routing."""
+
+    field: str
+    item_names: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class MutationConstraint:
+    context: AssertionContext
+    fields: frozenset[str]
+    item_names: frozenset[str]
+    whole_document: bool
+    item_reference: bool
+
+    def affects(self, target: MutationTarget) -> bool:
+        if self.whole_document:
+            return True
+        if self.item_names:
+            return bool(self.item_names & {name.casefold() for name in target.item_names})
+        if self.item_reference:
+            return bool(target.item_names)
+        return not self.fields or target.field in self.fields
+
+
+_TEXT_LABEL = re.compile(
+    r"\b(?P<customer_details>(?:(?:customer|client)(?:\s+contact)?|his|her|their)\s+details|"
+    r"(?:contact|billing)\s+(?:details|address)|(?:customer\s+)?address)\b|"
+    r"\b(?P<work_description>(?:work|job)\s+description|description)\b|"
+    r"\b(?P<customer_name>(?:customer|client)(?:\s+name)?|name)\b",
+    re.I,
+)
+_FIELD_LABELS: dict[str, str] = {
+    "amount": r"\b(?:amount|total|charge)\b",
+    "labour": r"\blabou?r\b",
+    "materials": r"\bmaterials?\b",
+    "vat_basis": r"\bvat\b",
+    "vat_rate": r"\bvat\b",
+}
+_CANCEL = re.compile(
+    r"\b(?:cancel|discard|abort|ignore|undo|retract|withdraw|scratch|scrap)\b|"
+    r"\bnever\s+mind\b|\bno\s+(?:changes?|updates?)\b|"
+    r"\b(?:do\s+not|don['’]t|never)\s+(?:(?:you|ever|please|actually)\s+)*"
+    r"(?:make|apply|save|record|perform|use|change|"
+    r"update|replace|set|charge)\b",
+    re.I,
+)
+_PRESERVE = re.compile(r"\b(?:keep|leave|retain|preserve|unchanged)\b", re.I)
+
+
+def _text_labels(message: str) -> tuple[re.Match[str], ...]:
+    """Only clause selectors label fields; words inside their payload stay data."""
+    result: list[re.Match[str]] = []
+    boundaries = list(re.finditer(r"[;\n!?]|\.(?=\s|$)|,(?![0-9])|\b(?:and|but)\b", message, re.I))
+    for label in _TEXT_LABEL.finditer(message):
+        start = max((mark.end() for mark in boundaries if mark.end() <= label.start()), default=0)
+        if any(start <= earlier.start() for earlier in result):
+            continue
+        prefix = _presented(message[start : label.start()])
+        if (
+            not prefix
+            or re.fullmatch(r"(?:the|this|his|her|their)", prefix, re.I)
+            or re.search(
+                r"\b(?:set|change|update|correct|record|use|replace|make|add|keep|leave)(?:\s+the)?\s*$",
+                prefix,
+                re.I,
+            )
+            or _document_scope(prefix) is not None
+            and re.search(r"\b(?:invoice|bill|job)\s*$", prefix, re.I)
+        ):
+            result.append(label)
+    return tuple(result)
+
+
+def mutation_constraints(
+    message: str, item_names: tuple[str, ...]
+) -> tuple[MutationConstraint, ...]:
+    """Retain current vetoes, including clauses without a new numeric value.
+
+    Named fields/items constrain their own changes. A document or unresolved
+    deictic cancellation cannot be cropped away by selecting earlier evidence.
+    """
+    constraints: list[MutationConstraint] = []
+    boundaries = list(
+        re.finditer(r"[;\n!?]|\.(?=\s|$)|,(?![0-9])|\b(?:and|but|or)\b", message, re.I)
+    )
+    start = 0
+    for end in [part.start() for part in boundaries] + [len(message)]:
+        clause = message[start:end]
+        verb = _CANCEL.search(clause) or _PRESERVE.search(clause)
+        if verb is not None and any(label.end() <= verb.start() for label in _text_labels(clause)):
+            # A field-owned text payload is data, including words such as
+            # "keep" or "scrap" describing the work. Later independent vetoes
+            # are still inspected in their own clauses.
+            verb = None
+        if verb is not None:
+            context = assertion_context(
+                message, start + verb.start(), start + verb.end(), topic="text"
+            )
+            if context.document_scope != DocumentScope.HISTORICAL:
+                names = frozenset(
+                    name.casefold()
+                    for name in item_names
+                    if re.search(r"(?<!\w)" + re.escape(name) + r"(?!\w)", clause, re.I)
+                )
+                fields = {
+                    field
+                    for field, pattern in _FIELD_LABELS.items()
+                    if re.search(pattern, clause, re.I)
+                }
+                fields.update(match.lastgroup for match in _text_labels(clause) if match.lastgroup)
+                if re.search(r"\bdescription\b", clause, re.I):
+                    fields.add("description")
+                document = not (names or fields) and bool(
+                    re.search(
+                        r"\b(?:invoice|bill|notes|everything|all\s+(?:changes|updates)|"
+                        r"(?:this|that|the)\s+(?:change|update|modification))\b|\bas\s+is\b",
+                        clause,
+                        re.I,
+                    )
+                )
+                document = document or bool(
+                    re.search(
+                        r"\b(?:this|that|the|all)\s+(?:changes?|updates?|modifications?)\b",
+                        clause,
+                        re.I,
+                    )
+                )
+                constraints.append(
+                    MutationConstraint(
+                        context,
+                        frozenset(fields),
+                        names,
+                        document,
+                        bool(
+                            re.search(
+                                r"\b(?:(?:this|that|selected|these)\s+(?:line\s+)?items?|(?:line|item)\s+description)\b",
+                                clause,
+                                re.I,
+                            )
+                        ),
+                    )
+                )
+        boundary = next((part for part in boundaries if part.start() == end), None)
+        start = boundary.end() if boundary is not None else len(message)
+    return tuple(constraints)
+
+
+def validate_mutation_authority(
+    message: str, targets: tuple[MutationTarget, ...], *, item_names: tuple[str, ...] = ()
+) -> None:
+    aliases = tuple(
+        dict.fromkeys((*item_names, *(name for target in targets for name in target.item_names)))
+    )
+    for constraint in mutation_constraints(message, aliases):
+        if constraint.whole_document or any(constraint.affects(target) for target in targets):
+            raise ValueError("cancelled or preserved preparation details")
+
+
+@dataclass(frozen=True)
+class TextAssertion:
+    field: TextField
+    value: str
+    context: AssertionContext
+
+
+def _explicit_text_assertions(message: str) -> tuple[TextAssertion, ...]:
+    result: list[TextAssertion] = []
+    labels = list(_text_labels(message))
+    for index, label in enumerate(labels):
+        field = label.lastgroup
+        if field not in {"customer_name", "work_description", "customer_details"}:
+            continue
+        end = next(
+            (mark.start() for mark in _HARD_BOUNDARY.finditer(message, label.end())), len(message)
+        )
+        if index + 1 < len(labels):
+            end = min(end, labels[index + 1].start())
+        prefix = re.match(
+            r"\s*(?:(?:is|are|was|were|to|as)\b\s*|[:=]\s*)?", message[label.end() : end], re.I
+        )
+        if prefix is None:
+            continue
+        start = label.end() + prefix.end()
+        value = message[start:end].strip().rstrip(",")
+        if value:
+            result.append(
+                TextAssertion(
+                    cast(TextField, field),
+                    value,
+                    assertion_context(message, start, start + len(value), topic="text"),
+                )
+            )
+    for statement in re.finditer(r"(?:^|[;\n!?]|\.(?=\s))([^;\n!?]+)", message):
+        raw_start = statement.start(1)
+        implicit = re.match(
+            r"\s*(?:(?:invoice|for)\s+|(?:this|the\s+(?:current|new|old|previous|earlier|last))\s+"
+            r"(?:invoice|bill)\s+(?:is\s+|was\s+)?for\s+|(?:it['’]?s|it\s+is)\s+)"
+            r"(?P<name>.+?)(?=\s*(?:€|[0-9]|[:,.]|\bfor\b)|$)",
+            statement.group(1),
+            re.I,
+        )
+        if implicit is not None:
+            start, end = implicit.span("name")
+            value = implicit.group("name").strip()
+            if (
+                value
+                and re.match(
+                    r"(?:total|subtotal|amount|price|cost|net|gross|final|balance|reference|number|vat)\b",
+                    value,
+                    re.I,
+                )
+                is None
+            ):
+                result.append(
+                    TextAssertion(
+                        "customer_name",
+                        value,
+                        assertion_context(
+                            message, raw_start + start, raw_start + end, topic="text"
+                        ),
+                    )
+                )
+    return tuple(result)
+
+
+def _text_role_matches(
+    message: str, start: int, end: int, field: TextField, *, allow_bare: bool
+) -> bool:
+    context = assertion_context(message, start, end, topic="text")
+    statement_start = max(
+        (mark.end() for mark in _HARD_BOUNDARY.finditer(message, 0, start)), default=0
+    )
+    prefix = message[statement_start:start]
+    labels = [
+        label
+        for label in _text_labels(message)
+        if statement_start <= label.start() and label.end() <= start
+    ]
+    if labels:
+        return labels[-1].lastgroup == field
+    presented = _presented(prefix)
+    if field == "customer_name":
+        return (
+            bool(
+                re.search(
+                    r"(?:^\s*(?:for|invoice)\s*|\b(?:invoice|bill)\s+(?:is\s+)?for\s*|"
+                    r"^\s*(?:it['’]?s|it\s+is)\s*)$",
+                    presented,
+                    re.I,
+                )
+            )
+            or allow_bare
+            and not presented
+            and not message[end:].strip(" .!?\n")
+        )
+    if field == "work_description":
+        return (
+            bool(re.search(r"\bfor\s*$", prefix, re.I))
+            or bool(re.fullmatch(r"\s*for\s+[^;:\n!?]+:\s*", prefix, re.I))
+            or (
+                not message[context.clause_start : start].strip()
+                and not message[end : context.clause_end].strip(" .!?:\n")
+                and (allow_bare or statement_start > 0 or context.clause_start > 0)
+            )
+        )
+    return False
+
+
+def text_evidence(
+    field: TextField, value: str, evidence: str, message: str, *, allow_bare: bool = False
+) -> bool:
+    """A text value retains source role, polarity, document scope and conflicts."""
+    spans = [match.span() for match in re.finditer(re.escape(evidence), message)]
+    candidates = [
+        (match.start(), match.end())
+        for match in re.finditer(r"(?<!\w)" + re.escape(value) + r"(?!\w)", message, re.I)
+        if (context := assertion_context(message, match.start(), match.end(), topic="text")).intent
+        == AssertionIntent.AFFIRMATIVE
+        and context.document_scope == DocumentScope.CURRENT
+        and _text_role_matches(message, match.start(), match.end(), field, allow_bare=allow_bare)
+    ]
+    if not spans or not all(
+        any(left <= start and end <= right for start, end in candidates) for left, right in spans
+    ):
+        return False
+    for assertion in _explicit_text_assertions(message):
+        if (
+            assertion.field == field
+            and assertion.context.intent == AssertionIntent.AFFIRMATIVE
+            and assertion.context.document_scope == DocumentScope.CURRENT
+            and not (
+                value.casefold().rstrip(".!?,") == assertion.value.casefold().rstrip(".!?,")
+                or value.casefold().startswith(assertion.value.casefold() + ";")
+            )
+        ):
+            return False
+    return True

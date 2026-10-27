@@ -112,9 +112,20 @@ class FinancialState:
     materials: Decimal | None = None
 
 
+_AMOUNT_LABEL = r"(?:total|subtotal|amount|price|cost|value|balance|sum)"
+_COLLECTIVE_MODIFIER = r"(?:combined|joint|aggregate|collective|cumulative)"
+_COLLECTIVE_TARGET = (
+    r"(?:everything|(?:the\s+)?lot|"
+    r"(?:(?:the|this)\s+)?(?:(?:whole|entire|full|complete)\s+)?(?:order|job)|"
+    r"(?:(?:all|both)\s+(?:of\s+)?(?:(?:the|these|those)\s+)?|"
+    r"(?:the\s+)?(?:two|three|four|five|six|seven|eight|nine|ten)\s+|"
+    r"(?:these|those|the)\s+)?(?:line\s+)?(?:items|lines))"
+)
+
+
 def _invoice_scope(text: str, *, item_bound: bool = False) -> bool:
     """Scope words apply to their complete label, even with cropped evidence."""
-    amount = r"(?:total|subtotal|amount|price|cost|value|balance|sum)"
+    amount = _AMOUNT_LABEL
     document = (
         r"(?:(?:the|this)\s+)?(?:(?:whole|entire|full)\s+)?(?:invoice|bill)(?:['’]s|[ -]wide)?"
     )
@@ -132,6 +143,10 @@ def _invoice_scope(text: str, *, item_bound: bool = False) -> bool:
             rf"\b{document}\s+{qualifier}{amount}\b|"
             rf"\b{amount}{due}\s+(?:(?:for|of|across|on)\s+)?{document}\b|"
             rf"\bgrand[ -]+{amount}\b|\boverall[ -]+(?:total|subtotal)\b|"
+            rf"\b{_COLLECTIVE_MODIFIER}\s+{amount}\b|"
+            rf"\b{amount}{due}\s+(?:for|of|across|on)\s+{_COLLECTIVE_TARGET}\b|"
+            rf"\b{amount}\s*€?\s*[0-9][0-9.,]*\s+(?:for|of|across|on)\s+"
+            rf"{_COLLECTIVE_TARGET}\b|"
             rf"\b{amount}{due}\s+(?:for|of|across)\s+(?:the\s+)?{items}\b|"
             rf"\b{items}\s+{qualifier}{amount}\b",
             text,
@@ -146,14 +161,76 @@ def _invoice_scope(text: str, *, item_bound: bool = False) -> bool:
     )
 
 
-def _ambiguous_aggregate_scope(text: str) -> bool:
+def _selected_line_total(text: str, descriptions: tuple[str, ...]) -> bool:
+    """Require a positive item-to-total binding, not absence of invoice words."""
+    number = r"(?:€\s*|(?:EUR|euros?)\s*)?[0-9][0-9.,]*(?:k|EUR|euros?|e)?"
+    total = r"(?:(?:line|item)\s+)?(?:total|subtotal|overall)"
+    for description in descriptions:
+        name = r"(?<!\w)" + re.escape(description) + r"(?!\w)"
+        if (
+            re.search(
+                name
+                + rf"\s*(?:(?:quantity|qty)\s*(?:(?:is|to|of|:|=)\s*)?{number}\s*)?"
+                + rf"(?:(?:for|at)\s+(?:(?:a|the)\s+)?)?{total}\b",
+                text,
+                re.I,
+            )
+            or re.search(
+                name
+                + r"\s*(?:(?:unit\s+)?(?:price|cost)|at|@)\s*"
+                + rf"(?:(?:is|to|of|:|=)\s*)?{number}\s*"
+                + rf"(?:(?:each|apiece|per\s+(?:item|unit))\s*)?(?:in\s+)?{total}\b",
+                text,
+                re.I,
+            )
+            or re.search(
+                rf"\b{total}\b(?:\s+(?:price|cost))?\s*"
+                + rf"(?:(?:is|to|of|:|=)\s*)?(?:{number}\s*)?"
+                + rf"(?:for|of)\s+(?:the\s+)?{name}",
+                text,
+                re.I,
+            )
+        ):
+            return True
+    return False
+
+
+def _ambiguous_aggregate_scope(
+    text: str, *, descriptions: tuple[str, ...] = (), binding_text: str | None = None
+) -> bool:
     """An unsupported wider target cannot silently become a selected line."""
-    amount = r"(?:total|subtotal|amount|price|cost|value|balance|sum)"
+    for description in descriptions:
+        text = re.sub(
+            r"\btotal\s+of(?=\s+[0-9][0-9,.]*\s+" + re.escape(description) + r"(?!\w))",
+            "",
+            text,
+            flags=re.I,
+        )
+    amount = _AMOUNT_LABEL
     wider = r"(?:all|both|whole|entire|full)\b"
-    return any(
+    if any(
         re.search(rf"\b{amount}\b", label, re.I) is not None
         and re.search(rf"\b{wider}", label, re.I) is not None
         for label in re.split(r"[0-9;\n]", text)
+    ):
+        return True
+    # An explicit target must resolve to the selected line or a supported wider
+    # scope. Unrecognised targets cannot be narrowed by selector proximity.
+    for match in re.finditer(
+        rf"\b{amount}\b(?:\s+{amount})*\s*"
+        r"(?:€?\s*[0-9][0-9.,]*\s*)?"
+        r"(?:for|of|across|on)\s+(?P<target>[^\W\d_][^0-9€;\n.!?]*)",
+        text,
+        re.I,
+    ):
+        target = re.split(r"\s+\b(?:is|are|to|of)\b", match.group("target"), maxsplit=1)[0]
+        target = re.sub(r"^the\s+", "", target.strip(), flags=re.I)
+        if not any(target.casefold() == name.casefold() for name in descriptions):
+            return True
+    return bool(
+        descriptions
+        and re.search(r"\b(?:total|subtotal|overall)\b", text, re.I)
+        and not _selected_line_total(binding_text or text, descriptions)
     )
 
 
@@ -673,6 +750,36 @@ def _unit_price_label(before: str, after: str) -> bool:
     )
 
 
+def _unsupported_rate_denominator(after: str, description: str | None = None) -> bool:
+    """A price for an unsupported unit cannot establish a whole or item charge."""
+    denominator = re.match(r"\s*(?:per\s+|/\s*)(?P<unit>[^\W\d_][\w-]*)", after, re.I)
+    if denominator is None:
+        return False
+    unit = denominator.group("unit").casefold()
+    return unit not in {"item", "unit"} and (description is None or unit != description.casefold())
+
+
+def _component_charge_role(before: str, after: str) -> FinancialRole | None:
+    """Generic amount/total/price words do not erase a bound component label."""
+    modifier = (
+        r"\s*(?:(?:is|are|was|were|to|of|for|due|in|charge|price|cost|amount|total|subtotal|"
+        r"net|gross|final|EUR|euros?)\s*|[:=]\s*)*"
+    )
+    parts = [
+        part.group().casefold()
+        for part in re.finditer(r"\b(?:labou?r|materials?)\b", before, re.I)
+        if re.fullmatch(modifier, before[part.end() :], re.I)
+    ]
+    following = re.match(r"\s*(?:for|on)\s+(labou?r|materials?)\b", after, re.I)
+    if following:
+        parts.append(following.group(1).casefold())
+    roles = {
+        FinancialRole.LABOUR if part in {"labour", "labor"} else FinancialRole.MATERIALS
+        for part in parts
+    }
+    return next(iter(roles)) if len(roles) == 1 else None
+
+
 def _item_number_roles(
     token: NumericToken,
     text: str,
@@ -689,7 +796,8 @@ def _item_number_roles(
     )
 
     prefix, suffix = text[: token.start], text[token.end :]
-    before, after = text[previous : token.start], text[token.end : following]
+    raw_before, raw_after = text[previous : token.start], text[token.end : following]
+    before, after = raw_before, raw_after
     if description is not None:
         before = re.sub(r"(?<!\w)" + re.escape(description) + r"(?!\w)", "", before, flags=re.I)
     before = re.sub(r"(?:€|\b(?:EUR|euros?))\s*$", "", before, flags=re.I)
@@ -709,13 +817,15 @@ def _item_number_roles(
     # A label between amounts belongs to the following amount. Only a final
     # postfix label can establish this token's scope; do not steal the next
     # invoice label from an explicitly stated unit price.
-    invoice = _invoice_scope(before, item_bound=description is not None) or (
-        following == len(text) and _invoice_scope(after, item_bound=description is not None)
-    )
-    ambiguous_scope = not invoice and (
-        _ambiguous_aggregate_scope(before)
-        or following == len(text)
-        and _ambiguous_aggregate_scope(after)
+    scope_before = re.sub(r"(?:€|\b(?:EUR|euros?))\s*$", "", raw_before, flags=re.I)
+    scope_after = re.sub(r"^\s*(?:€|EUR\b|euros?\b|e\b)", "", raw_after, flags=re.I)
+    scope_label = scope_before + " " + scope_after if following == len(text) else scope_before
+    invoice = _invoice_scope(scope_label, item_bound=description is not None)
+    descriptions = (description,) if description is not None else ()
+    ambiguous_scope = (
+        not invoice
+        and not quantity_total
+        and _ambiguous_aggregate_scope(scope_label, descriptions=descriptions, binding_text=text)
     )
     total = not quantity_total and bool(
         re.search(r"\b(?:total|subtotal|overall|deposit)\b", before, re.I)
@@ -770,7 +880,14 @@ def _item_number_roles(
         Clause(clause_start, clause_start + len(text), text),
         assertion_context(original, start, end, topic="financial"),
     )
-    return ItemNumberRoles(evidence, partial or total and explicit_unit or ambiguous_scope)
+    return ItemNumberRoles(
+        evidence,
+        partial
+        or total
+        and explicit_unit
+        or ambiguous_scope
+        or _unsupported_rate_denominator(after, description),
+    )
 
 
 def _item_numbers_supported(text: str, description: str | None, tokens: list[NumericToken]) -> bool:
@@ -793,6 +910,21 @@ def _scalar_number_evidence(
     """Classify a scalar source without replacing explicit unit/partial scope."""
     text = clause.text
     start, end = token.start - clause.start, token.end - clause.start
+    prefix, suffix = text[:start], text[end:]
+    # Financial labels do not change an explicitly different numeric role. In
+    # particular a duration, quantity or reference remains data rather than a fee.
+    if re.search(
+        r"\b(?:address|reference|ref|number|count|quantity|qty|duration)\s*"
+        r"(?:(?:is|to|of|:|=|#)\s*)?(?:(?:€|EUR|euros?)\s*)?$",
+        prefix,
+        re.I,
+    ) or re.match(
+        r"\s*(?:hours?|hrs?|minutes?|mins?|seconds?|days?|weeks?|months?|years?|"
+        r"(?:units?|items?|pieces?)(?!\s+(?:price|cost)\b))\b",
+        suffix,
+        re.I,
+    ):
+        return None
     if re.search(r"(?<!\w)[0-9][0-9.,]*\s*[xX]\s*(?:€|EUR|euros?)?\s*[0-9]", text, re.I):
         return None
     tokens = numeric_tokens(text)
@@ -802,11 +934,30 @@ def _scalar_number_evidence(
     before = re.sub(r"(?:€|\b(?:EUR|euros?))\s*$", "", before, flags=re.I)
     after = re.sub(r"^\s*(?:€|EUR\b|euros?\b|e\b)", "", after, flags=re.I)
     postfix = after if following == len(text) else ""
+    if (
+        not _monetary(token, message)
+        and re.search(r"[0-9]k$", message[token.start : token.end], re.I) is None
+        and re.match(r"\s+[^\W\d_]", after)
+        and re.match(
+            r"\s*(?:for\b|actually\b|please\b|thanks\b|cheers\b|(?:no\s+|before\s+|including\s+|excluding\s+|plus\s+|"
+            r"ex\s+|incl\.?\s+|excl\.?\s+)?VAT\b|net\b|gross\b)",
+            after,
+            re.I,
+        )
+        is None
+    ):
+        return None
+    component = _component_charge_role(before, after)
     scope: AmountScope | None
     if re.search(r"\bdeposit\b", before + " " + postfix, re.I):
         actual, scope = FinancialRole.TOTAL, AmountScope.PARTIAL
-    elif _unit_price_label(before, after):
+    elif _unit_price_label(before, after) or _unsupported_rate_denominator(after):
         actual, scope = FinancialRole.UNIT_PRICE, AmountScope.UNIT
+    elif component is not None:
+        if _invoice_scope(before, item_bound=True) or _invoice_scope(postfix, item_bound=True):
+            actual, scope = FinancialRole.UNCLASSIFIED, AmountScope.AMBIGUOUS
+        else:
+            actual, scope = component, AmountScope.PARTIAL
     elif _invoice_scope(before) or _invoice_scope(postfix):
         actual, scope = FinancialRole.AMOUNT, AmountScope.INVOICE
     elif _ambiguous_aggregate_scope(before) or _ambiguous_aggregate_scope(postfix):
@@ -818,7 +969,14 @@ def _scalar_number_evidence(
         preceding = [
             label
             for label in labels
-            if label.end() <= start and not re.search(r"[0-9]", text[label.end() : start])
+            if label.end() <= start
+            and re.fullmatch(
+                r"\s*(?:(?:is|are|was|were|to|of|for|due|in|charge|price|cost|amount|total|"
+                r"EUR|euros?)\s*|[:=]\s*)*"
+                r"(?:€|EUR|euros?)?\s*",
+                text[label.end() : start],
+                re.I,
+            )
         ]
         following_labels = [
             label
@@ -838,19 +996,41 @@ def _scalar_number_evidence(
             )
             scope = AmountScope.INVOICE if actual == FinancialRole.AMOUNT else AmountScope.PARTIAL
         else:
+            # Unique numbers embedded in prose are not financial evidence.
+            # Preserve complete monetary shorthand, including Irish e/k forms,
+            # and bare numeric answers only when they are the complete input.
             monetary = [
-                candidate for candidate in numeric_tokens(message) if _monetary(candidate, message)
+                candidate
+                for candidate in numeric_tokens(message)
+                if _monetary(candidate, message)
+                or re.search(r"[0-9]k$", message[candidate.start : candidate.end], re.I)
             ]
-            if not (
-                len(monetary) == 1
-                and token == monetary[0]
-                or not monetary
-                and len(numeric_tokens(message)) == 1
-            ):
+            unsupported_label = any(
+                part.end() <= start and not re.search(r"[0-9]", text[part.end() : start])
+                for part in labels
+            )
+            shorthand = len(monetary) == 1 and token == monetary[0] and not unsupported_label
+            bare_answer = message.strip().rstrip(".!?") == message[token.start : token.end]
+            correction = (
+                re.fullmatch(
+                    r"\s*(?:back\s+to\s+(?:that|this|the)\s+(?:job|invoice|bill)\s*,\s*)?"
+                    r"(?:actually|it['’]?s|it\s+is|make\s+it|set\s+it\s+to|change\s+it\s+to)\s*",
+                    message[: token.start],
+                    re.I,
+                )
+                is not None
+            )
+            invoice_charge = (
+                re.fullmatch(
+                    r"\s*(?:please\s+)?invoice\s+[^\W\d_][\w '’&()./-]{0,200}\s+",
+                    prefix,
+                    re.I,
+                )
+                is not None
+            )
+            if not (shorthand or bare_answer or correction or invoice_charge):
                 return None
-            # The existing unique-charge shorthand has no explicit scalar role.
-            # Keep that uncertainty rather than inventing an aggregate label.
-            actual, scope = FinancialRole.CHARGE, None
+            actual, scope = FinancialRole.AMOUNT, AmountScope.INVOICE
     return FinancialEvidence(
         token.value,
         token.start,
@@ -910,11 +1090,7 @@ def role_matches(
         return roles.quantity and not roles.conflict and roles.evidence.affirmative
     if role in {"amount", "labour", "materials"}:
         source = _scalar_number_evidence(token, message, clause)
-        return (
-            source is not None
-            and source.role in {FinancialRole(role), FinancialRole.CHARGE}
-            and source.affirmative
-        )
+        return source is not None and source.role == FinancialRole(role) and source.affirmative
     return True
 
 
@@ -1138,7 +1314,9 @@ def _invoice_evidence(
             for name in item_descriptions
         )
         invoice = _invoice_scope(clause.text, item_bound=bound)
-        if not invoice and not _ambiguous_aggregate_scope(clause.text):
+        if not invoice and not _ambiguous_aggregate_scope(
+            clause.text, descriptions=item_descriptions if bound else ()
+        ):
             continue
         tokens = numeric_tokens(clause.text)
         scoped = [
@@ -1156,6 +1334,22 @@ def _invoice_evidence(
             ).total_scope
             in {AmountScope.INVOICE, AmountScope.AMBIGUOUS}
         ]
+        if scoped and not bound:
+            # Reuse the same scalar role boundary: a labour/materials total is
+            # a component charge, not an invoice total with its label discarded.
+            scoped = [
+                source
+                for source in scoped
+                if (
+                    scalar := _scalar_number_evidence(
+                        NumericToken(source.start, source.end, source.value), message, clause
+                    )
+                )
+                is None
+                or scalar.role not in {FinancialRole.LABOUR, FinancialRole.MATERIALS}
+            ]
+            if not scoped:
+                continue
         # Historical amounts do not constrain this preparation. The complete
         # label still supplies context when malformed numeric syntax yielded no
         # valid token, so unsupported current expressions cannot disappear.
