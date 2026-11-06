@@ -2,6 +2,10 @@
 
 Status: proposed for Milestone 3 independent re-review.
 
+The subsequent review of `dec21d05` found five remaining P2 authority defects.
+[ADR 0010](0010-tara-complete-statement-authority.md) records the follow-up
+correction; the original verification below describes the earlier implementation.
+
 ## Problem
 
 Independent review of `daded2df3e3e0cc2004d1e4aa385955e368d5a76`

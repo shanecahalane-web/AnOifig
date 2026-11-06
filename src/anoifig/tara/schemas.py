@@ -19,6 +19,7 @@ from anoifig.tara.assertions import (
     assertion_context,
     text_evidence,
     validate_mutation_authority,
+    validate_statement_coverage,
 )
 from anoifig.tara.financial import (
     FinancialItemState,
@@ -613,6 +614,16 @@ def _validate_final_state(
         message,
         tuple(targets),
         item_names=tuple(item.description for item in (*before.line_items, *final.line_items)),
+    )
+    validate_statement_coverage(
+        message,
+        item_names=tuple(item.description for item in (*before.line_items, *final.line_items)),
+        text_values=tuple(
+            value
+            for notes in (before, final)
+            for value in (notes.customer_name, notes.work_description, notes.customer_details)
+            if value is not None
+        ),
     )
     validate_final_financial_state(
         message,

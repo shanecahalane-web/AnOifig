@@ -2,6 +2,7 @@
 
 import json
 import os
+import select
 import signal
 import subprocess
 import sys
@@ -17,6 +18,16 @@ from anoifig.tara.provider import AIRequest, OpenAIProvider, ProviderFailure
 
 HELPER = Path(__file__).parents[1] / "helpers" / "tara_provider_child.py"
 REQUEST = AIRequest({}, (), "Hello Tara", state_version=7, pending_clarification="vat_rate")
+PREPARED_CHILDREN = []
+
+
+@pytest.fixture(autouse=True)
+def prepared_child_cleanup():
+    yield
+    for child, output in PREPARED_CHILDREN:
+        provider_isolation._stop(child)
+        output.close()
+    PREPARED_CHILDREN.clear()
 
 
 @pytest.fixture
@@ -44,6 +55,61 @@ def launch(monkeypatch, tmp_path, scenario):
     journal = tmp_path / "provider-events.jsonl"
     children = []
     original = subprocess.Popen
+
+    # Fault-stage tests start with SDK/schema imports complete. The separate
+    # startup/startup_ignore_term cases deliberately use the cold path below,
+    # proving that the production deadline also bounds slow child setup.
+    prepared = scenario in {"success", "dns", "dns_ignore_term", "late", "retry"}
+    if prepared:
+        reader, writer = os.pipe()
+        result = os.fdopen(os.memfd_create("tara-test-prepared", os.MFD_CLOEXEC), "w+b")
+        try:
+            child = original(
+                [
+                    sys.executable,
+                    "-I",
+                    str(HELPER),
+                    scenario,
+                    str(journal),
+                    str(os.getpid()),
+                    str(writer),
+                ],
+                stdin=subprocess.PIPE,
+                stdout=result,
+                stderr=subprocess.PIPE,
+                env={
+                    name: value
+                    for name, value in os.environ.items()
+                    if name in provider_isolation._NETWORK_ENVIRONMENT
+                },
+                close_fds=True,
+                pass_fds=(writer,),
+            )
+            PREPARED_CHILDREN.append((child, result))
+            os.close(writer)
+            writer = None
+            if not select.select([reader], [], [], 20)[0] or os.read(reader, 1) != b"R":
+                pytest.fail("Offline SDK fixture did not finish preparation within 20 seconds")
+        finally:
+            os.close(reader)
+            if writer is not None:
+                os.close(writer)
+        children.append(child)
+        communicate = child.communicate
+
+        def prepared_start(output):
+            def copy_result(payload, timeout):
+                response = communicate(payload, timeout=timeout)
+                result.seek(0)
+                output.write(result.read(provider_isolation.MAX_OUTPUT_BYTES + 1))
+                output.flush()
+                return response
+
+            child.communicate = copy_result
+            return child
+
+        monkeypatch.setattr(provider_isolation, "_start_child", prepared_start)
+        return journal, children
 
     def start_child(output):
         child = original(
@@ -140,11 +206,14 @@ def test_sigkill_worker_also_kills_its_live_resolver_child(tmp_path):
     parent = subprocess.Popen(
         [sys.executable, "-I", str(harness), str(journal)],
         stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
     child_pid = None
     try:
+        assert parent.stdout is not None
+        assert select.select([parent.stdout], [], [], 25)[0], "Worker fixture must prepare"
+        assert parent.stdout.read(1) == b"R", "Worker fixture must signal readiness"
         ready_by = time.monotonic() + 5
         while time.monotonic() < ready_by:
             started = next(
@@ -177,6 +246,8 @@ def test_sigkill_worker_also_kills_its_live_resolver_child(tmp_path):
                 os.kill(child_pid, signal.SIGKILL)
         if parent.stderr is not None:
             parent.stderr.close()
+        if parent.stdout is not None:
+            parent.stdout.close()
 
 
 @pytest.mark.parametrize("scenario", ["malformed", "oversized"])

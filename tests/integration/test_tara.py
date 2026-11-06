@@ -55,7 +55,11 @@ def accept(client, message, *, phone=PHONE):
         jobs = (
             connection.execute(text("SELECT * FROM messaging_discover_jobs(1000)")).mappings().all()
         )
-    return next(job["job_id"] for job in jobs if job["job_id"] not in before)
+    # An older outbound job can become eligible between discovery calls. It is
+    # not the newly accepted message, even though it was absent from `before`.
+    inbound = [job for job in jobs if job["kind"] == "inbound" and job["job_id"] not in before]
+    assert len(inbound) == 1
+    return inbound[0]["job_id"]
 
 
 def rows_from_client(client):

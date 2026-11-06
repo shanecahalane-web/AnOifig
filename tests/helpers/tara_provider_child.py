@@ -10,7 +10,8 @@ from pathlib import Path
 
 from anoifig.tara.provider_process import main, protect_parent
 
-scenario, journal_name, parent_pid = sys.argv[1:]
+scenario, journal_name, parent_pid = sys.argv[1:4]
+ready_descriptor = int(sys.argv[4]) if len(sys.argv) == 5 else None
 assert protect_parent(int(parent_pid))
 journal = Path(journal_name)
 
@@ -65,17 +66,7 @@ if scenario in {"dns", "dns_ignore_term"}:
             ),
         )
 
-    async def resolver_completion(self, client, request):
-        # Keep the actual SDK/HTTPX resolver and teardown, without spending this
-        # two-second fault test constructing unrelated strict tool schemas. The
-        # original component and isolated-success tests retain those assertions.
-        return await client.chat.completions.create(
-            model=self.configuration.model,
-            messages=[{"role": "user", "content": "offline resolver fault"}],
-        )
-
     transport.AsyncOpenAI = resolver_client
-    transport.OpenAITransport._completion = resolver_completion
 elif scenario == "malformed":
     sys.stdout.write('{"private":"not a result"}')
     raise SystemExit(0)
@@ -133,6 +124,25 @@ else:
         )
 
     transport.AsyncOpenAI = client
+
+if ready_descriptor is not None:
+    import asyncio
+
+    from openai import pydantic_function_tool
+    from openai.lib._pydantic import to_strict_json_schema
+
+    from anoifig.tara.schemas import ProposedNotes, Reply
+
+    # Load the real lazy SDK resources and strict schemas before fault timing.
+    # Do not send a request, substitute _completion, or change any deadline.
+    pydantic_function_tool(ProposedNotes)
+    to_strict_json_schema(Reply)
+    prepared_client = transport.AsyncOpenAI(api_key="offline-fixture-never-sent")
+    prepared_resource = prepared_client.chat.completions
+    asyncio.run(prepared_client.close())
+    emit("prepared")
+    os.write(ready_descriptor, b"R")
+    os.close(ready_descriptor)
 
 sys.argv = [sys.argv[0], parent_pid]
 raise SystemExit(main())

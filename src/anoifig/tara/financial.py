@@ -16,6 +16,8 @@ from anoifig.tara.assertions import (
     AssertionIntent,
     DocumentScope,
     assertion_context,
+    invoice_command_prefix,
+    text_payload_contains,
 )
 
 
@@ -677,6 +679,22 @@ def numeric_tokens(message: str, *, allow_percentage: bool = False) -> list[Nume
 def expression_context_safe(message: str, tokens: list[NumericToken]) -> bool:
     if not _currency_context_supported(message) or _UNCERTAIN.search(message):
         return False
+    # Past-tense numbers in independently scoped old documents do not make a
+    # separate current assertion a from/to correction. Keep current/unknown
+    # scopes in the same conflict checks; do not delete source evidence itself.
+    active = []
+    for clause in clauses(message):
+        numbers = list(re.finditer(r"[0-9]+(?:[.,][0-9]+)*", clause.text))
+        if numbers and all(
+            assertion_context(
+                message, clause.start + number.start(), clause.start + number.end()
+            ).document_scope
+            == DocumentScope.HISTORICAL
+            for number in numbers
+        ):
+            continue
+        active.append(clause.text)
+    message = ";".join(active)
     # Alternatives can omit both the second currency and the second VAT label.
     raw_numbers = list(re.finditer(r"[0-9]+(?:[.,][0-9]+)*", message))
     if len(raw_numbers) > 1 and re.search(r"\bor\b|\bversus\b|\bvs\.?\b", message, re.I):
@@ -859,6 +877,41 @@ def _item_number_roles(
     # total semantics on the same expression also requires clarification.
     quantity = not price and (labelled_quantity or noun_quantity)
     unit_price = price and not labelled_quantity and not total
+    if unit_price:
+        # Absence of a recognised aggregate is insufficient unit-price evidence.
+        # Require the complete selector/price phrase to use supported connectors.
+        remaining = re.sub(
+            r"\b(?:please|actually|change|set|update|make|use|charge|increase|reduce|"
+            r"keep|leave|retain|preserve|stays?|the|a|to|at|is|are|was|were|"
+            r"unit|price|cost|each|apiece|per|for|on)\b|"
+            r"[@:=,*_~`\s]",
+            "",
+            before,
+            flags=re.I,
+        )
+        tail = after
+        if following < len(text):
+            # A label between numbers belongs to the next number; its role and
+            # final-state consistency are validated independently.
+            tail = re.sub(
+                r"\b(?:(?:invoice|grand|whole|net|final)\s+)*"
+                r"(?:total|subtotal|invoice)\s*(?:€|EUR|euros?)?\s*$",
+                "",
+                tail,
+                flags=re.I,
+            )
+        if description:
+            tail = re.sub(r"(?<!\w)" + re.escape(description) + r"(?!\w)", "", tail, flags=re.I)
+        tail = re.sub(
+            r"\b(?:each|apiece|per|item|unit|for|at|please|thanks|cheers|unchanged)\b|[\s,.*_~`-]+",
+            "",
+            tail,
+            flags=re.I,
+        )
+        if remaining or tail:
+            unit_price = False
+            ambiguous_scope = True
+            scope = AmountScope.AMBIGUOUS
     role = (
         FinancialRole.TOTAL
         if total
@@ -908,6 +961,8 @@ def _scalar_number_evidence(
     token: NumericToken, message: str, clause: Clause
 ) -> FinancialEvidence | None:
     """Classify a scalar source without replacing explicit unit/partial scope."""
+    if text_payload_contains(message, token.start, token.end):
+        return None
     text = clause.text
     start, end = token.start - clause.start, token.end - clause.start
     prefix, suffix = text[:start], text[end:]
@@ -1009,21 +1064,43 @@ def _scalar_number_evidence(
                 part.end() <= start and not re.search(r"[0-9]", text[part.end() : start])
                 for part in labels
             )
-            shorthand = len(monetary) == 1 and token == monetary[0] and not unsupported_label
+            shorthand = (
+                len(monetary) == 1
+                and token == monetary[0]
+                and not unsupported_label
+                and not re.sub(r"[\s*_~`>]+|€|EUR|euros?", "", prefix, flags=re.I)
+            )
             bare_answer = message.strip().rstrip(".!?") == message[token.start : token.end]
             correction = (
                 re.fullmatch(
                     r"\s*(?:back\s+to\s+(?:that|this|the)\s+(?:job|invoice|bill)\s*,\s*)?"
-                    r"(?:actually|it['’]?s|it\s+is|make\s+it|set\s+it\s+to|change\s+it\s+to)\s*",
-                    message[: token.start],
+                    r"(?:sorry\s+)?(?:actually\s+)?"
+                    r"(?:actually|that['’]?s|it['’]?s|it\s+is|make\s+(?:it|that|this)|"
+                    r"(?:set|change)\s+(?:it|that|this)\s+to)\s*",
+                    re.sub(r"(?:€|EUR|euros?)\s*$", "", message[: token.start], flags=re.I),
                     re.I,
                 )
                 is not None
             )
             invoice_charge = (
-                re.fullmatch(
-                    r"\s*(?:please\s+)?invoice\s+[^\W\d_][\w '’&()./-]{0,200}\s+",
-                    prefix,
+                invoice_command_prefix(prefix)
+                and re.fullmatch(
+                    r"\s*(?:please\s+)?invoice\s+"
+                    r"(?!(?:reference|ref|number|count|quantity|duration)\b)"
+                    r"[^\W\d_][\w '’&()./-]{0,200}\s+",
+                    re.sub(r"(?:€|EUR|euros?)\s*$", "", prefix, flags=re.I),
+                    re.I,
+                )
+                is not None
+            )
+            # A numbered address can contain a sentence-like abbreviation. Its
+            # financial charge still needs the original imperative and `for`.
+            invoice_charge = (
+                invoice_charge
+                or re.fullmatch(
+                    r"\s*(?:please\s+)?invoice\s+[^\W\d_][\w '’&/-]{0,100}\s+"
+                    r"at\s+(?:No\.\s*)?[0-9]+\s+[\w '’/-]{1,100}\s+for\s*(?:€|EUR|euros?)?\s*",
+                    message[: token.start],
                     re.I,
                 )
                 is not None

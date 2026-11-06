@@ -232,6 +232,18 @@ def _local_intent(
         and _document_scope(inherited) == DocumentScope.HISTORICAL
     ):
         inherited = ""
+    if re.search(
+        r"\b(?:was|were|had|used|suggested|proposed|reported|recommended)\b", local, re.I
+    ) and not (
+        re.fullmatch(r"\s*actually\s*", after, re.I)
+        and re.fullmatch(
+            r"\s*(?:the\s+)?(?:labou?r|materials?|amount|total|price|charge)\s+"
+            r"(?:was|were)\s*(?:€|EUR|euros?)?\s*",
+            before,
+            re.I,
+        )
+    ):
+        return AssertionIntent.AMBIGUOUS
     context = _registration_facts(inherited + local, expression)
     if _NEGATIVE.search(context):
         return AssertionIntent.NEGATED
@@ -337,6 +349,8 @@ def assertion_context(
         heading_start, heading_intent = None, None
     if heading_intent is not None and intent == AssertionIntent.AFFIRMATIVE:
         intent = heading_intent
+    if topic != "text" and text_payload_contains(message, start, end):
+        intent = AssertionIntent.AMBIGUOUS
     return AssertionContext(
         start,
         end,
@@ -403,7 +417,7 @@ _CANCEL = re.compile(
     r"update|replace|set|charge)\b",
     re.I,
 )
-_PRESERVE = re.compile(r"\b(?:keep|leave|retain|preserve|unchanged)\b", re.I)
+_PRESERVE = re.compile(r"\b(?:keep|leave|retain|preserve|unchanged|stays?)\b", re.I)
 
 
 def _text_labels(message: str) -> tuple[re.Match[str], ...]:
@@ -416,15 +430,23 @@ def _text_labels(message: str) -> tuple[re.Match[str], ...]:
             continue
         prefix = _presented(message[start : label.start()])
         if (
-            not prefix
-            or re.fullmatch(r"(?:the|this|his|her|their)", prefix, re.I)
-            or re.search(
-                r"\b(?:set|change|update|correct|record|use|replace|make|add|keep|leave)(?:\s+the)?\s*$",
+            (
+                not prefix
+                or re.fullmatch(r"(?:the|this|his|her|their)", prefix, re.I)
+                or _document_scope(prefix) is not None
+                and re.search(r"\b(?:invoice|bill|job)\s*$", prefix, re.I)
+            )
+            and re.match(
+                r"\s*(?:[:=]|(?:is|are|was|were|to|as|not|never|no|unchanged|stays?)\b)",
+                message[label.end() :],
+                re.I,
+            )
+            or re.fullmatch(
+                r"(?:(?:please|actually|now|instead)\s+)*"
+                r"(?:set|change|update|correct|record|use|replace|make|add|keep|leave)(?:\s+the)?",
                 prefix,
                 re.I,
             )
-            or _document_scope(prefix) is not None
-            and re.search(r"\b(?:invoice|bill|job)\s*$", prefix, re.I)
         ):
             result.append(label)
     return tuple(result)
@@ -445,8 +467,26 @@ def mutation_constraints(
     start = 0
     for end in [part.start() for part in boundaries] + [len(message)]:
         clause = message[start:end]
-        verb = _CANCEL.search(clause) or _PRESERVE.search(clause)
-        if verb is not None and any(label.end() <= verb.start() for label in _text_labels(clause)):
+        labels = _text_labels(clause)
+        # A later negative fact about a named field need not repeat its value or
+        # use an imperative verb to revoke earlier authority for that field.
+        denial = next(
+            (
+                re.search(r"\b(?:not|never|no)\b", clause[label.end() :], re.I)
+                for label in labels
+                if re.match(r"\s+(?:(?:is|are)\s+)?(?:not|never|no)\b", clause[label.end() :], re.I)
+            ),
+            None,
+        )
+        # Keep coordinates relative to the original clause, like other verbs.
+        if denial is not None:
+            denial = _NEGATIVE.search(clause)
+        verb = _CANCEL.search(clause) or _PRESERVE.search(clause) or denial
+        if (
+            verb is not None
+            and verb is not denial
+            and any(label.end() <= verb.start() for label in labels)
+        ):
             # A field-owned text payload is data, including words such as
             # "keep" or "scrap" describing the work. Later independent vetoes
             # are still inspected in their own clauses.
@@ -520,6 +560,312 @@ class TextAssertion:
     field: TextField
     value: str
     context: AssertionContext
+
+
+def text_payload_contains(message: str, start: int, end: int) -> bool:
+    """A number in an explicitly owned text value cannot authorise money/VAT."""
+    return any(
+        assertion.context.start <= start and end <= assertion.context.end
+        for assertion in _explicit_text_assertions(message)
+        if _text_labels(message[assertion.context.clause_start : assertion.context.start])
+    )
+
+
+def _operational_words_supported(statement: str, item_names: tuple[str, ...]) -> bool:
+    """Check the entire operational phrase, including text after its value.
+
+    Names are opaque item selectors. All other words must belong to the bounded
+    command grammar; unknown predicates do not become affirmative by default.
+    Field-owned customer/work/contact payloads are handled separately.
+    """
+    remaining = statement
+    if re.search(r"\bactually\s*$", remaining, re.I):
+        remaining = re.sub(r"\b(?:was|were)\b", "is", remaining, flags=re.I)
+    # Explicit quantity/name/at-price syntax may describe an item the proposal
+    # leaves uncollected. Its opaque name is data for coverage only; item writes
+    # must still pass the independent selector, numeric-role and total checks.
+    remaining = re.sub(
+        r"(?<!\w)[0-9]+(?:\.[0-9]+)?\s+[^\W\d_][\w '’/-]{0,300}?\s+at\s+"
+        r"(?:€|EUR\s*)?[0-9][0-9.,]*",
+        "",
+        remaining,
+        flags=re.I,
+    )
+    for name in sorted(item_names, key=len, reverse=True):
+        remaining = re.sub(r"(?<!\w)" + re.escape(name) + r"(?!\w)", " ", remaining, flags=re.I)
+    remaining = re.sub(
+        r"(?:euros?|EUR)?[0-9][0-9.,]*(?:euros?|EUR|k|e)?", " ", remaining, flags=re.I
+    )
+    remaining = re.sub(r"\b(?:and\s+)?that\s+is\s+correct\b", "", remaining, flags=re.I)
+    remaining = re.sub(
+        r"\b(?:please|sorry|actually|correction|now|instead|and|but|set|change|update|make|use|uses|apply|"
+        r"charge|increase|reduce|rename|correct|replace|all|whole|entire|the|a|an|to|at|"
+        r"is|are|it|its|thats|that|s|for|of|on|this|one|current|new|being|prepared|invoice|bill|job|amount|price|cost|"
+        r"total|subtotal|grand|net|gross|final|due|balance|overall|both|deposit|in|or|labou?r|materials?|unit|"
+        r"quantity|qty|each|apiece|per|item|items|line|so|with|vat|rate|tax|including|"
+        r"included|excluding|inclusive|exclusive|incl|inc|excl|ex|before|plus|no|not|"
+        r"registered|exempt|zero|rated|percent|cent|euros?|eur|e|k|thanks|cheers|"
+        r"repairs?|boiler|work|hours?|hrs?|installation|replacement|wrong|valve|pen|tray)\b|[\s0-9€%.,:=@&/'’()-]+",
+        "",
+        remaining,
+        flags=re.I,
+    )
+    return not remaining
+
+
+def _captured_invoice_statement(statement: str, text_values: tuple[str, ...]) -> str:
+    """Consume opaque captured data only in explicit invoice/for data slots."""
+    result = statement
+    for value in sorted(text_values, key=len, reverse=True):
+        result = re.sub(
+            r"^(invoice\s+|for\s+)" + re.escape(value) + r"(?!\w)",
+            r"\1",
+            result,
+            flags=re.I,
+        )
+        result = re.sub(
+            r"(\bfor\s+|:\s*)" + re.escape(value) + r"(?=\s*:|\s*$)",
+            r"\1",
+            result,
+            flags=re.I,
+        )
+    return result
+
+
+def invoice_command_prefix(text: str) -> bool:
+    """An invoice imperative names a recipient, not a document reference."""
+    return (
+        re.match(
+            r"^\s*(?:please\s+)?invoice\s+"
+            r"(?!(?:from|for|dated|of|on|in|at|reference|ref|number|code|count|quantity|duration)\b)",
+            text,
+            re.I,
+        )
+        is not None
+    )
+
+
+def _contact_data_fragment(statement: str, text_values: tuple[str, ...]) -> bool:
+    """Recognise bounded contact data after a semicolon in a captured value.
+
+    A captured value alone cannot consume an arbitrary later instruction. Only
+    contact literals and single-token metadata labels have this continuation form.
+    """
+    if not any(
+        statement.casefold() == part.strip().casefold()
+        for value in text_values
+        for part in value.split(";")[1:]
+    ):
+        return False
+    return (
+        re.fullmatch(
+            r"[^\s;@]+@[^\s;@]+\.[^\s;@]+|"
+            r"[+()0-9][\s()0-9-]{5,30}|"
+            r"IBAN\s+[A-Z]{2}[0-9]{2}(?:\s*[A-Z0-9]){11,30}|"
+            r"(?:private\s+)?(?:contact\s+)?(?:marker|reference|label)\s+[\w-]+",
+            statement,
+            re.I,
+        )
+        is not None
+    )
+
+
+def validate_statement_coverage(
+    message: str, *, item_names: tuple[str, ...], text_values: tuple[str, ...]
+) -> None:
+    """Reject unparsed statements instead of discarding their possible authority.
+
+    This envelope does not extract values. Field-specific validators still prove
+    each value, polarity and scope. Unknown continuations, even without a new
+    value, cannot be assumed harmless. Explicit text payloads remain data.
+    """
+    for raw in re.split(r"[;\n!?]|(?<!\bNo)\.(?=\s|$)", message, flags=re.I):
+        statement = _presented(raw).strip(" ,:")
+        if raw.rstrip().endswith(":") and re.fullmatch(r"[0-9]+", statement):
+            raise ValueError("unresolved numeric heading")
+        if any(statement.casefold() == value.casefold() for value in text_values):
+            continue
+        if _contact_data_fragment(statement, text_values):
+            continue
+        if any(
+            re.fullmatch(
+                r"(?:it['’]?s|it\s+is)\s+" + re.escape(new) + r",\s*not\s+" + re.escape(old),
+                statement,
+                re.I,
+            )
+            for new in text_values
+            for old in text_values
+            if new != old
+        ):
+            continue
+        labels = _text_labels(statement)
+        if not labels:
+            continued = [part.strip() for part in _SOFT_BOUNDARY.split(statement) if part.strip()]
+            if len(continued) > 1:
+                # Classify independent continuations before considering document
+                # scope. A historical clause cannot own a later current veto.
+                validate_statement_coverage(
+                    ";".join(continued), item_names=item_names, text_values=text_values
+                )
+                continue
+        if not statement or _document_scope(statement) == DocumentScope.HISTORICAL:
+            continue
+        if re.match(
+            r"^(?:the\s+)?(?:old|previous|earlier|last)\s+(?:invoice|bill|job)\b", statement, re.I
+        ):
+            current = re.split(r",\s*(?:but\s+)?|\bbut\s+", statement, flags=re.I)
+            if len(current) > 1:
+                validate_statement_coverage(
+                    current[-1], item_names=item_names, text_values=text_values
+                )
+                continue
+        if re.fullmatch(
+            r"(?:(?:hello|hi|thanks|thank you|cheers|please)[ ,]*)+|"
+            r"how are you|what time (?:tomorrow|today)|that is correct|"
+            r"(?:can|could) you (?:get|make|prepare) an? invoice ready|"
+            r"back to (?:that|this|the) (?:job|invoice|bill)",
+            statement,
+            re.I,
+        ):
+            continue
+        # These independent, bounded work/contact statements do not refer to a
+        # saved field or to an earlier instruction. Everything else still needs
+        # an explicit supported subject below.
+        if re.fullmatch(
+            r"(?:(?:is|are|which)\s+(?:the\s+)?repairs?\s+(?:complete|apply)|"
+            r"(?:choose\s+)?(?:repairs?|installation|replacement)"
+            r"(?:\s+or\s+(?:repairs?|installation|replacement))*(?:\s+are\s+fine)?|"
+            r"the\s+old\s+parts?\s+(?:is|are)\s+incorrect)|"
+            r"call [\s+()0-9-]+|discount [0-9]+(?:\.[0-9]+)?%",
+            statement,
+            re.I,
+        ):
+            continue
+        # Scoped vetoes have already been checked against the mutation targets.
+        if _CANCEL.search(statement) or _PRESERVE.search(statement):
+            control = re.sub(
+                r"\b(?:cancel|discard|abort|ignore|undo|retract|withdraw|scratch|scrap|"
+                r"keep|leave|retain|preserve|unchanged|stays?|existing|original|as|"
+                r"customer|client|name|description|address|contact|details)\b",
+                "",
+                statement,
+                flags=re.I,
+            )
+            if _operational_words_supported(control, (*item_names, *text_values)):
+                continue
+            # An opaque field payload may contain these words as data. Only a
+            # leading control verb makes it a preservation/cancellation clause.
+            if not _text_labels(statement) or re.match(
+                r"^(?:please\s+)?(?:keep|leave|retain|preserve|cancel|ignore)\b", statement, re.I
+            ):
+                raise ValueError("unresolved preservation or cancellation clause")
+        if labels:
+            if re.match(r"\s*(?:was|were)\b", statement[labels[0].end() :], re.I):
+                raise ValueError("historical text is not current authority")
+            # A later field label cannot hide an unparsed leading instruction.
+            prefix = statement[: labels[0].start()]
+            leading = _SOFT_BOUNDARY.split(prefix)
+            if len(leading) > 1:
+                validate_statement_coverage(
+                    ";".join(leading[:-1]), item_names=item_names, text_values=text_values
+                )
+            # Preserve punctuation inside a captured text value. Otherwise a
+            # following clause must stand on its own, even when the proposal
+            # does not update this text field.
+            payload = re.sub(
+                r"^\s*(?:(?:is|are|to|as)\b\s*|[:=]\s*)?",
+                "",
+                statement[labels[0].end() :],
+                flags=re.I,
+            )
+            if not any(payload.casefold() == value.casefold() for value in text_values):
+                continued = _SOFT_BOUNDARY.split(payload)
+                if len(continued) > 1:
+                    validate_statement_coverage(
+                        ";".join(continued[1:]), item_names=item_names, text_values=text_values
+                    )
+            continue
+        if any(
+            re.fullmatch(r"(?:for|invoice)\s+" + re.escape(value), statement, re.I)
+            for value in text_values
+        ):
+            continue
+        content = re.sub(
+            r"^(?:(?:please|sorry|actually|correction|now|instead|and|but)\s+)*"
+            r"(?:(?:set|change|update|make|use|apply|charge|increase|reduce|rename|correct)\s+)?"
+            r"(?:to\s+)?(?:the\s+|a\s+)?",
+            "",
+            statement,
+            flags=re.I,
+        )
+        if re.match(r"^invoice\s+", content, re.I) and not invoice_command_prefix(content):
+            raise ValueError("invoice reference is not a preparation command")
+        negative_context = _registration_facts(statement, statement)
+        if re.fullmatch(r"(?:no\s+vat,?\s*)?not\s+registered", statement, re.I):
+            negative_context = ""
+        if _NEGATIVE.search(negative_context) and not re.match(r"^invoice\b", content, re.I):
+            raise ValueError("unresolved negative statement")
+        if re.match(
+            r"^(?:amount\b|price\b|total\b|subtotal\b|grand\b|whole invoice\b|"
+            r"labou?r\b|materials?\b|vat\b|"
+            r"including\b|excluding\b|inclusive\b|exclusive\b|before\b|plus\b|"
+            r"no\s+vat\b|not\s+(?:vat\s+)?registered\b|"
+            r"replace\s+(?:all|the\s+(?:whole|entire))\b|"
+            r"(?:it|that)(?:['’]?s|\s+is|\s+to)?\b|€|[0-9]|eur(?:os?)?)",
+            content,
+            re.I,
+        ):
+            if not _operational_words_supported(statement, item_names) or re.match(
+                r"^[0-9]+\s+(?:invoice|job|bill)\s*$", statement, re.I
+            ):
+                raise ValueError("unsupported operational statement")
+            continue
+        if re.match(r"^(?:invoice|for)\s+", content, re.I):
+            captured = _captured_invoice_statement(content, text_values)
+            if captured != content and _operational_words_supported(captured, item_names):
+                continue
+        if re.match(r"^invoice\s+", content, re.I):
+            if re.fullmatch(
+                r"invoice\s+[^\W\d_][\w '’&/-]{0,100}\s+at\s+(?:No\.\s*)?"
+                r"[0-9]+\s+[\w '’/-]{1,100}\s+for\s*(?:€|EUR|euros?)?\s*[0-9.,]+",
+                content,
+                re.I,
+            ):
+                continue
+            tail = re.sub(r"^invoice\s+[^€0-9]+(?=€|[0-9])", "", content, flags=re.I)
+            if tail != content and _operational_words_supported(tail, item_names):
+                continue
+        if re.fullmatch(r"for the estimate", statement, re.I):
+            continue
+        if any(
+            re.fullmatch(
+                r"for\s+[^:]+:\s*(?:supply|repair|replace|install)\s+" + re.escape(name),
+                content,
+                re.I,
+            )
+            for name in item_names
+        ):
+            continue
+        if _document_scope(content) == DocumentScope.CURRENT and re.match(
+            r"^(?:for\s+)?(?:this|current|new|the\s+(?:current|new)|the\s+invoice)\b", content, re.I
+        ):
+            if _operational_words_supported(statement, item_names):
+                continue
+            if any(
+                re.fullmatch(
+                    r"(?:this|the\s+(?:current|new))\s+(?:invoice|bill)\s+(?:is\s+)?for\s+"
+                    + re.escape(value),
+                    statement,
+                    re.I,
+                )
+                for value in text_values
+            ):
+                continue
+        if any(
+            re.match(re.escape(name) + r"(?!\w)", content, re.I) for name in item_names
+        ) and _operational_words_supported(statement, item_names):
+            continue
+        raise ValueError("unresolved statement in preparation request")
 
 
 def _explicit_text_assertions(message: str) -> tuple[TextAssertion, ...]:
@@ -615,11 +961,31 @@ def _text_role_matches(
     if field == "work_description":
         return (
             bool(re.search(r"\bfor\s*$", prefix, re.I))
-            or bool(re.fullmatch(r"\s*for\s+[^;:\n!?]+:\s*", prefix, re.I))
+            or bool(re.fullmatch(r"\s*for\s+[^;:,\n!?]+[:,]\s*", prefix, re.I))
             or (
                 not message[context.clause_start : start].strip()
                 and not message[end : context.clause_end].strip(" .!?:\n")
-                and (allow_bare or statement_start > 0 or context.clause_start > 0)
+                and allow_bare
+                and not message[:start].strip()
+                and not message[end:].strip(" .!?:\n")
+                and re.match(
+                    r"(?:fixing|repairing|repairs?|replacing|installing|installation|"
+                    r"fitting|painting|tiling|servicing|service|maintenance|cleaning|"
+                    r"cutting|building|skimming|laying|jetting|changing|welding|checking)\b",
+                    message[start:end],
+                    re.I,
+                )
+                is not None
+                and not _NEGATIVE.search(message[start:end])
+                and not _CONDITIONAL.search(message[start:end])
+                and not _AMBIGUOUS.search(message[start:end])
+                and not re.search(
+                    r"\b(?:was|were|had|used|while|until|pending|awaiting|before|after)\b",
+                    message[start:end],
+                    re.I,
+                )
+                and not _SOFT_BOUNDARY.search(message[start:end])
+                and not _HARD_BOUNDARY.search(message[start:end].rstrip(".!?"))
             )
         )
     return False
@@ -629,6 +995,20 @@ def text_evidence(
     field: TextField, value: str, evidence: str, message: str, *, allow_bare: bool = False
 ) -> bool:
     """A text value retains source role, polarity, document scope and conflicts."""
+    # A model cannot extend a text field across an independent instruction and
+    # also reuse that instruction as financial authority. Preserve only bounded
+    # contact-data continuations; other multi-clause values need clarification.
+    parts = re.split(r"[;\n!?]|(?<!\bNo)\.(?=\s|$)", value.rstrip(".!?"), flags=re.I)
+    if any(
+        not (
+            field == "customer_details"
+            and _contact_data_fragment(part.strip(), (";" + part.strip(),))
+            or field == "work_description"
+            and re.fullmatch(r"call\s+[\s+()0-9-]+", part.strip(), re.I) is not None
+        )
+        for part in parts[1:]
+    ):
+        return False
     spans = [match.span() for match in re.finditer(re.escape(evidence), message)]
     candidates = [
         (match.start(), match.end())
