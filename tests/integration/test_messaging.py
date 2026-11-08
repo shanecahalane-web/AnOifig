@@ -929,7 +929,22 @@ def test_concurrent_messages_and_callbacks_remain_distinct_and_tenant_isolated(
         outboxes = rows(database, "outbox")
         assert len(outboxes) == len(forms)
         list(executor.map(worker.process_delivery, [outbox["id"] for outbox in outboxes] * 2))
-    drain(worker)
+    # Ordered replies may be deferred behind another accepted turn. The direct
+    # concurrent deliveries above have finished; advance only their polling
+    # cooldown, preserving source retry deadlines and all delivery state. Use
+    # this bounded drain directly: the generic idle helper can reject eight
+    # productive batches before this ordered-drain phase is reached.
+    for _ in range(per_tenant + 1):
+        if len(provider.calls) == len(forms):
+            break
+        with database.admin.begin() as connection:
+            connection.execute(
+                text(
+                    "UPDATE message_jobs SET claim_until = now() - interval '1 second' "
+                    "WHERE ready AND due_at <= now()"
+                )
+            )
+        worker.run_once()
     outgoing = rows(database, "messages", "WHERE direction = 'outbound'")
     assert len(outgoing) == len(forms)
     assert len(provider.calls) == len(forms)

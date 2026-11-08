@@ -1,15 +1,19 @@
 # An Oifig
 
-An Oifig is a multi-tenant SaaS backend for Irish tradespeople. Tara communicates through WhatsApp. Milestone 2 adds signed Twilio text-message webhooks,
-explicit phone/account linking, durable PostgreSQL queues and an outbound outbox,
-a separate worker, and delivery callbacks to the Python 3.13/FastAPI backend.
-Authorised text messages receive this deterministic response:
+An Oifig is a multi-tenant SaaS backend for Irish tradespeople. Milestone 3 adds
+Tara's OpenAI conversational engine to the secure WhatsApp worker: persistent
+preparation notes, corrections, structured intent/tool outputs, safe actions,
+usage budgets and failure recovery. The API still acknowledges webhooks after
+durable enqueue; AI processing happens in the separate worker.
 
-> Hi, I'm Tara, your An Oifig assistant. Your message has been received successfully.
-
-There is no OpenAI integration, voice processing, invoicing, WhatsApp Flow,
-Power Automate, or SharePoint dependency. This implementation has not been
-deployed or connected to production Twilio settings.
+Local Compose keeps the explicit fixed-acknowledgement and Twilio simulator modes.
+No live accounts, paid resources or deployment are needed. Invoice issuance,
+numbering, PDFs, financial delivery, voice and WhatsApp Flows remain unavailable.
+See [Tara configuration and testing](docs/runbooks/tara.md) and
+[the AI architecture decision](docs/adr/0006-tara-conversations.md).
+Real OpenAI execution uses an isolated local child process on supported Linux;
+see [the lifecycle and evidence contract](docs/adr/0007-tara-evidence-and-provider-isolation.md).
+Acknowledgement and mock modes remain available without live providers.
 
 Read [the production blueprint](An_Oifig_Production_Blueprint.md),
 [engineering rules](AGENTS.md), and [architecture decisions](docs/adr/0001-backend-foundation.md)
@@ -247,6 +251,7 @@ uv run --frozen ruff check .
 uv run --frozen ruff format --check .
 uv run --frozen mypy src
 uv audit --locked
+uv run --frozen bandit -r src -q
 docker compose --profile test run --build --rm tests
 ```
 
@@ -277,6 +282,7 @@ src/anoifig/
   businesses/   Business boundary
   customers/    Customer schemas, repository and service boundary
   messaging/    Phone links, conversations, durable queues, worker and Twilio adapter
+  tara/         Versioned AI instructions, typed provider, validation and orchestration
   db/           SQLAlchemy models and transaction/session infrastructure
   config.py     Validated environment configuration
 migrations/     Reviewed Alembic schema and RLS changes
@@ -286,7 +292,7 @@ docs/adr/       Architecture/security decisions
 docs/runbooks/  Operational development instructions
 ```
 
-The API and messaging worker share domain services in this package. Future AI,
+The API and messaging worker share domain services in this package. Tara and future
 invoice, voice and Flow modules must call authorised domain services rather than
 write database records directly. The queue contract can later be adapted to
 Azure Service Bus; the current implementation uses PostgreSQL locally. See
@@ -336,6 +342,8 @@ vendor DPAs and privacy/transfer review, callback monitoring, uncertain-send
 reconciliation and operational ownership. Test proxy URL/signature handling,
 delivery failures, revocation, recovery and load in staging with approved test
 accounts. The [messaging runbook](docs/runbooks/messaging.md) records these gates.
-OpenAI access, invoice issuance and Irish tax review remain later milestones.
+Live OpenAI approval and model-quality evaluation, physical retention/deletion,
+monitoring, invoice issuance and Irish tax review remain release requirements.
+See the [Tara runbook](docs/runbooks/tara.md) for AI limits and production gates.
 Work through reviewed branches and pull requests; do not merge or deploy
 automatically.

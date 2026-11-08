@@ -21,6 +21,10 @@ RUNTIME_TABLE_PRIVILEGES: dict[str, frozenset[str]] = {
     "messages": frozenset({"SELECT", "INSERT", "UPDATE"}),
     "outbox": frozenset({"SELECT", "INSERT", "UPDATE"}),
     "message_jobs": frozenset(),
+    **{
+        table: frozenset({"SELECT", "INSERT", "UPDATE"})
+        for table in ("tara_states", "tara_runs", "tara_usage")
+    },
 }
 
 # Do not give the application generic function execution. These functions reveal

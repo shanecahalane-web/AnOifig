@@ -1,5 +1,6 @@
 """The forward claim migration preserves messages accepted by revision 0002."""
 
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 from uuid import uuid4
@@ -13,12 +14,44 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session
 
 from anoifig.db.messaging_models import Conversation, Message, Outbox, PhoneLink
-from anoifig.db.privileges import provision_runtime_grants
+from anoifig.db.privileges import RUNTIME_TABLE_PRIVILEGES, provision_runtime_grants
 from anoifig.db.session import check_runtime_database
 
 pytestmark = pytest.mark.integration
 TABLES = ("phone_links", "conversations", "messages", "outbox", "message_jobs")
 CLAIM_COLUMNS = {"claim_token", "claim_until", "last_claimed_at"}
+
+
+@contextmanager
+def historical_schema(connection):
+    """Validate historical revisions against their own table privilege contract.
+
+    Production still requires every current table. Only these migration tests
+    temporarily select the pre-Tara contract while intentionally downgrading.
+    """
+    if connection.scalar(text("SELECT to_regclass('public.tara_states')")) is not None:
+        yield
+        return
+    historical = {
+        name: rights
+        for name, rights in RUNTIME_TABLE_PRIVILEGES.items()
+        if not name.startswith("tara_")
+    }
+    with (
+        patch("anoifig.db.privileges.RUNTIME_TABLE_PRIVILEGES", historical),
+        patch("anoifig.db.session.RUNTIME_TABLE_PRIVILEGES", historical),
+    ):
+        yield
+
+
+def check_migration_database(connection):
+    with historical_schema(connection):
+        check_runtime_database(connection)
+
+
+def provision_migration_grants(connection, role):
+    with historical_schema(connection):
+        provision_runtime_grants(connection, role)
 
 
 def snapshot(database, *, include_claims=False):
@@ -28,7 +61,8 @@ def snapshot(database, *, include_claims=False):
                 {
                     key: value
                     for key, value in row.items()
-                    if include_claims or key not in CLAIM_COLUMNS
+                    if key != "conversation_version"
+                    and (include_claims or key not in CLAIM_COLUMNS)
                 }
                 for row in connection.execute(text(f"SELECT * FROM {table} ORDER BY id")).mappings()
             ]
@@ -76,40 +110,34 @@ def insert_revision_0002_records(database, seed):
             )
         )
         session.flush()
-        session.add_all(
-            [
-                Message(
-                    id=processed_id,
-                    **common,
-                    direction="inbound",
-                    body="Earlier accepted text",
-                    twilio_sid="SM" + uuid4().hex,
-                    status="processed",
-                    processed_at=now,
-                    processing_attempts=1,
-                ),
-                Message(
-                    id=pending_id,
-                    **common,
-                    direction="inbound",
-                    body="Accepted before upgrade",
-                    twilio_sid="SM" + uuid4().hex,
-                    status="received",
-                ),
-            ]
-        )
-        session.flush()
-        session.add(
-            Message(
+        # Core inserts explicitly list the historical columns. ORM persistence
+        # would also emit later nullable fields absent from revision 0002.
+        for values in (
+            dict(
+                id=processed_id,
+                direction="inbound",
+                body="Earlier accepted text",
+                twilio_sid="SM" + uuid4().hex,
+                status="processed",
+                processed_at=now,
+                processing_attempts=1,
+            ),
+            dict(
+                id=pending_id,
+                direction="inbound",
+                body="Accepted before upgrade",
+                twilio_sid="SM" + uuid4().hex,
+                status="received",
+            ),
+            dict(
                 id=reply_id,
-                **common,
                 direction="outbound",
                 body="Committed reply",
                 reply_to_id=processed_id,
                 status="retry",
-            )
-        )
-        session.flush()
+            ),
+        ):
+            session.execute(Message.__table__.insert().values(**common, **values))
         session.add(
             Outbox(
                 id=outbox_id,
@@ -137,9 +165,9 @@ def test_upgrade_existing_0002_records_and_claim_downgrade_preserve_durable_stat
             command.upgrade(config, "0003_messaging_queue_claims")
             assert snapshot(database) == before
             with database.admin.begin() as connection:
-                provision_runtime_grants(connection, make_url(database.runtime_url).username)
+                provision_migration_grants(connection, make_url(database.runtime_url).username)
             with database.runtime.begin() as connection:
-                check_runtime_database(connection)
+                check_migration_database(connection)
                 claims = connection.execute(text("SELECT * FROM messaging_claim_jobs(100)")).all()
                 assert {claim.job_id for claim in claims} == expected_ready
                 assert connection.scalar(text("SELECT count(*) FROM messages")) == 0
@@ -175,7 +203,7 @@ def test_upgrade_existing_0002_records_and_claim_downgrade_preserve_durable_stat
         finally:
             command.upgrade(config, "head")
             with database.admin.begin() as connection:
-                provision_runtime_grants(connection, make_url(database.runtime_url).username)
+                provision_migration_grants(connection, make_url(database.runtime_url).username)
 
 
 def security_snapshot(database):
@@ -194,7 +222,8 @@ def security_snapshot(database):
                 text(
                     "SELECT tablename,policyname,permissive,roles,cmd,qual,with_check "
                     "FROM pg_policies "
-                    "WHERE schemaname = 'public' ORDER BY tablename,policyname"
+                    "WHERE schemaname = 'public' AND tablename NOT LIKE 'tara_%' "
+                    "ORDER BY tablename,policyname"
                 )
             ).all(),
             connection.execute(
@@ -213,21 +242,25 @@ def test_fairness_upgrade_keeps_applied_0003_data_receipts_rls_and_grants(databa
             command.downgrade(config, "0003_messaging_queue_claims")
             ready_ids = insert_revision_0002_records(database, seed)
             with database.runtime.begin() as connection:
-                check_runtime_database(connection)
+                check_migration_database(connection)
                 [delivery] = connection.execute(text("SELECT * FROM messaging_claim_jobs(1)")).all()
             before = snapshot(database, include_claims=True)
             security = security_snapshot(database)
             for target in ("head", "0003_messaging_queue_claims", "head"):
                 if target == "head":
                     command.upgrade(config, target)
+                    with database.admin.begin() as connection:
+                        provision_runtime_grants(
+                            connection, make_url(database.runtime_url).username
+                        )
                 else:
                     command.downgrade(config, target)
                 assert snapshot(database, include_claims=True) == before
                 assert security_snapshot(database) == security
                 with database.runtime.begin() as connection:
                     # CREATE OR REPLACE retains the existing narrow EXECUTE
-                    # grants; no newly privileged runtime or grant repair needed.
-                    check_runtime_database(connection)
+                    # grants. Tara tables receive their own reviewed grants above.
+                    check_migration_database(connection)
                     discovered = (
                         connection.execute(text("SELECT job_id FROM messaging_discover_jobs(100)"))
                         .scalars()
@@ -253,4 +286,4 @@ def test_fairness_upgrade_keeps_applied_0003_data_receipts_rls_and_grants(databa
         finally:
             command.upgrade(config, "head")
             with database.admin.begin() as connection:
-                provision_runtime_grants(connection, make_url(database.runtime_url).username)
+                provision_migration_grants(connection, make_url(database.runtime_url).username)

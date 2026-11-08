@@ -1,0 +1,1928 @@
+[
+  {
+    "label": "new-cancelled-vat",
+    "mode": "vat",
+    "message": "Apply VAT 23%. That instruction has been cancelled.",
+    "changes": [
+      {
+        "field": "vat_rate",
+        "value": "23",
+        "evidence": "23%"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "new-defer-item",
+    "mode": "items",
+    "message": "Change valves unit price €30. Hold off applying that until I confirm.",
+    "changes": [],
+    "patches": [
+      {
+        "index": 0,
+        "description": "valves",
+        "evidence": "Change valves unit price €30",
+        "changes": [
+          {
+            "field": "unit_price",
+            "value": "30",
+            "evidence": "Change valves unit price €30"
+          }
+        ]
+      }
+    ],
+    "positive": false
+  },
+  {
+    "label": "new-defer-name",
+    "mode": "scalar",
+    "message": "Change customer name to Nora Flynn. Hold off applying that until I confirm.",
+    "changes": [
+      {
+        "field": "customer_name",
+        "value": "Nora Flynn",
+        "evidence": "Nora Flynn"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "new-defer-vat",
+    "mode": "vat",
+    "message": "Use VAT 23%. Wait for my approval before saving it.",
+    "changes": [
+      {
+        "field": "vat_rate",
+        "value": "23",
+        "evidence": "23%"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "new-discussion-labour",
+    "mode": "scalar",
+    "message": "For discussion only: labour €500.",
+    "changes": [
+      {
+        "field": "labour",
+        "value": "500",
+        "evidence": "€500"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "new-forget-name",
+    "mode": "scalar",
+    "message": "Change customer name to Nora Flynn. Actually, forget the whole request.",
+    "changes": [
+      {
+        "field": "customer_name",
+        "value": "Nora Flynn",
+        "evidence": "Nora Flynn"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "new-formatted-vat-options",
+    "mode": "vat",
+    "message": "**VAT choices:**\n(a) VAT 23%\n(b) no VAT",
+    "changes": [
+      {
+        "field": "vat_rate",
+        "value": "23",
+        "evidence": "23%"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "new-history-name",
+    "mode": "scalar",
+    "message": "Customer name was Nora Flynn. This is background for a dispute, not an update.",
+    "changes": [
+      {
+        "field": "customer_name",
+        "value": "Nora Flynn",
+        "evidence": "Nora Flynn"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "new-history-vat",
+    "mode": "vat",
+    "message": "The archived invoice used VAT 23%.",
+    "changes": [
+      {
+        "field": "vat_rate",
+        "value": "23",
+        "evidence": "23%"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "new-mixed-access-number",
+    "mode": "scalar",
+    "message": "Change work description to annual inspection; gate code 275; duration 90 minutes; keep all financial fields unchanged.",
+    "changes": [
+      {
+        "field": "amount",
+        "value": "275",
+        "evidence": "275"
+      },
+      {
+        "field": "work_description",
+        "value": "annual inspection",
+        "evidence": "annual inspection"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "new-mixed-cancel",
+    "mode": "scalar",
+    "message": "Change customer name to Nora Flynn and work description to annual inspection. Actually, forget the whole request.",
+    "changes": [
+      {
+        "field": "customer_name",
+        "value": "Nora Flynn",
+        "evidence": "Nora Flynn"
+      },
+      {
+        "field": "work_description",
+        "value": "annual inspection",
+        "evidence": "annual inspection"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "new-mixed-known-reject",
+    "mode": "scalar",
+    "message": "Change labour price to €500; do not change customer name to Nora Flynn.",
+    "changes": [
+      {
+        "field": "labour",
+        "value": "500",
+        "evidence": "€500"
+      },
+      {
+        "field": "customer_name",
+        "value": "Nora Flynn",
+        "evidence": "Nora Flynn"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "new-mixed-reference",
+    "mode": "scalar",
+    "message": "Change work description to annual inspection. Invoice reference was €500.",
+    "changes": [
+      {
+        "field": "amount",
+        "value": "500",
+        "evidence": "€500"
+      },
+      {
+        "field": "work_description",
+        "value": "annual inspection",
+        "evidence": "annual inspection"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "new-multiline-forget",
+    "mode": "scalar",
+    "message": "Change customer name to Nora Flynn.\n*Update:* forget the whole request.",
+    "changes": [
+      {
+        "field": "customer_name",
+        "value": "Nora Flynn",
+        "evidence": "Nora Flynn"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "new-multiline-mixed-negation",
+    "mode": "scalar",
+    "message": "Change work description to annual inspection.\n*Customer name:* Nora Flynn.\nThat is the payer, not the customer.",
+    "changes": [
+      {
+        "field": "customer_name",
+        "value": "Nora Flynn",
+        "evidence": "Nora Flynn"
+      },
+      {
+        "field": "work_description",
+        "value": "annual inspection",
+        "evidence": "annual inspection"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "new-package-price",
+    "mode": "items",
+    "message": "Change valves price to €90 for the package.",
+    "changes": [],
+    "patches": [
+      {
+        "index": 0,
+        "description": "valves",
+        "evidence": "Change valves price to €90",
+        "changes": [
+          {
+            "field": "unit_price",
+            "value": "90",
+            "evidence": "Change valves price to €90"
+          }
+        ]
+      }
+    ],
+    "positive": false
+  },
+  {
+    "label": "new-reference-amount",
+    "mode": "scalar",
+    "message": "Invoice reference was €500.",
+    "changes": [
+      {
+        "field": "amount",
+        "value": "500",
+        "evidence": "€500"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "new-repudiate-address",
+    "mode": "scalar",
+    "message": "Customer address: 19 River Road. That is not the address for this invoice.",
+    "changes": [
+      {
+        "field": "customer_details",
+        "value": "19 River Road",
+        "evidence": "19 River Road"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "new-repudiate-name",
+    "mode": "scalar",
+    "message": "Customer name: Nora Flynn. That is not the customer on this invoice.",
+    "changes": [
+      {
+        "field": "customer_name",
+        "value": "Nora Flynn",
+        "evidence": "Nora Flynn"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "new-repudiate-work",
+    "mode": "scalar",
+    "message": "Work description: boiler replacement. That is not what was done on this job.",
+    "changes": [
+      {
+        "field": "work_description",
+        "value": "boiler replacement",
+        "evidence": "boiler replacement"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "new-shared-price",
+    "mode": "items",
+    "message": "Change valves so the price shared by the two entries is €90.",
+    "changes": [],
+    "patches": [
+      {
+        "index": 0,
+        "description": "valves",
+        "evidence": "valves so the price shared by the two entries is €90",
+        "changes": [
+          {
+            "field": "unit_price",
+            "value": "90",
+            "evidence": "valves so the price shared by the two entries is €90"
+          }
+        ]
+      }
+    ],
+    "positive": false
+  },
+  {
+    "label": "new-stop-vat",
+    "mode": "vat",
+    "message": "Use VAT 23%. Stop that change.",
+    "changes": [
+      {
+        "field": "vat_rate",
+        "value": "23",
+        "evidence": "23%"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "new-supplier-contact",
+    "mode": "scalar",
+    "message": "Change customer details to 0897654321. That is the supplier contact, not the customer.",
+    "changes": [
+      {
+        "field": "customer_details",
+        "value": "0897654321",
+        "evidence": "0897654321"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "new-withdraw-vat",
+    "mode": "vat",
+    "message": "Apply VAT 23%. That instruction is withdrawn.",
+    "changes": [
+      {
+        "field": "vat_rate",
+        "value": "23",
+        "evidence": "23%"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "positive-address",
+    "mode": "scalar",
+    "message": "Change customer address to 19 River Road.",
+    "changes": [
+      {
+        "field": "customer_details",
+        "value": "19 River Road",
+        "evidence": "19 River Road"
+      }
+    ],
+    "patches": [],
+    "positive": true
+  },
+  {
+    "label": "positive-amount",
+    "mode": "scalar",
+    "message": "Change total amount to €500.",
+    "changes": [
+      {
+        "field": "amount",
+        "value": "500",
+        "evidence": "€500"
+      }
+    ],
+    "patches": [],
+    "positive": true
+  },
+  {
+    "label": "positive-contact",
+    "mode": "scalar",
+    "message": "Change customer details to 0897654321.",
+    "changes": [
+      {
+        "field": "customer_details",
+        "value": "0897654321",
+        "evidence": "0897654321"
+      }
+    ],
+    "patches": [],
+    "positive": true
+  },
+  {
+    "label": "positive-current-vat",
+    "mode": "vat",
+    "message": "The old invoice had no VAT. Set VAT 23% on this invoice.",
+    "changes": [
+      {
+        "field": "vat_rate",
+        "value": "23",
+        "evidence": "23%"
+      }
+    ],
+    "patches": [],
+    "positive": true
+  },
+  {
+    "label": "positive-item",
+    "mode": "items",
+    "message": "Change valves unit price €30; keep elbows unchanged.",
+    "changes": [],
+    "patches": [
+      {
+        "index": 0,
+        "description": "valves",
+        "evidence": "Change valves unit price €30",
+        "changes": [
+          {
+            "field": "unit_price",
+            "value": "30",
+            "evidence": "Change valves unit price €30"
+          }
+        ]
+      }
+    ],
+    "positive": true
+  },
+  {
+    "label": "positive-labour",
+    "mode": "scalar",
+    "message": "Change labour price to €500.",
+    "changes": [
+      {
+        "field": "labour",
+        "value": "500",
+        "evidence": "€500"
+      }
+    ],
+    "patches": [],
+    "positive": true
+  },
+  {
+    "label": "positive-name",
+    "mode": "scalar",
+    "message": "Change customer name to Nora Flynn.",
+    "changes": [
+      {
+        "field": "customer_name",
+        "value": "Nora Flynn",
+        "evidence": "Nora Flynn"
+      }
+    ],
+    "patches": [],
+    "positive": true
+  },
+  {
+    "label": "positive-vat",
+    "mode": "vat",
+    "message": "Use VAT 23%.",
+    "changes": [
+      {
+        "field": "vat_rate",
+        "value": "23",
+        "evidence": "23%"
+      }
+    ],
+    "patches": [],
+    "positive": true
+  },
+  {
+    "label": "positive-work",
+    "mode": "scalar",
+    "message": "Change work description to annual inspection.",
+    "changes": [
+      {
+        "field": "work_description",
+        "value": "annual inspection",
+        "evidence": "annual inspection"
+      }
+    ],
+    "patches": [],
+    "positive": true
+  },
+  {
+    "label": "previous-cancel-item",
+    "mode": "items",
+    "message": "Change valves unit price €30; do not make this change",
+    "changes": [],
+    "patches": [
+      {
+        "index": 0,
+        "description": "valves",
+        "evidence": "Change valves unit price €30",
+        "changes": [
+          {
+            "field": "unit_price",
+            "value": "30",
+            "evidence": "Change valves unit price €30"
+          }
+        ]
+      }
+    ],
+    "positive": false
+  },
+  {
+    "label": "previous-cancel-scalar",
+    "mode": "scalar",
+    "message": "Set amount €500; no, cancel that",
+    "changes": [
+      {
+        "field": "amount",
+        "value": "500",
+        "evidence": "Set amount €500"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "previous-collective",
+    "mode": "items",
+    "message": "Change valves so the total for everything is €90",
+    "changes": [],
+    "patches": [
+      {
+        "index": 0,
+        "description": "valves",
+        "evidence": "Change valves so the total for everything is €90",
+        "changes": [
+          {
+            "field": "unit_price",
+            "value": "30",
+            "evidence": "Change valves so the total for everything is €90"
+          }
+        ]
+      }
+    ],
+    "positive": false
+  },
+  {
+    "label": "previous-format",
+    "mode": "vat",
+    "message": "*Which VAT treatment applies?*\n- VAT 23%",
+    "changes": [
+      {
+        "field": "vat_rate",
+        "value": "23",
+        "evidence": "VAT 23%"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "previous-historical-address",
+    "mode": "scalar",
+    "message": "The previous invoice address is 25 Main Street; this invoice address is 1 Oak Road.",
+    "changes": [
+      {
+        "field": "customer_details",
+        "value": "25 Main Street",
+        "evidence": "25 Main Street"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "previous-historical-name",
+    "mode": "scalar",
+    "message": "The previous invoice was for Jack; this invoice is for John.",
+    "changes": [
+      {
+        "field": "customer_name",
+        "value": "Jack",
+        "evidence": "Jack"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "previous-historical-work",
+    "mode": "scalar",
+    "message": "The old invoice work description was maintenance; this invoice is for repairs.",
+    "changes": [
+      {
+        "field": "work_description",
+        "value": "maintenance",
+        "evidence": "maintenance"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "previous-history-basis",
+    "mode": "vat",
+    "message": "Use including VAT; the old invoice is VAT exempt, but this invoice is excluding VAT.",
+    "changes": [
+      {
+        "field": "vat_basis",
+        "value": "inclusive",
+        "evidence": "including VAT"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "previous-history-rate",
+    "mode": "vat",
+    "message": "Use VAT 23%; the old invoice is exempt, but now use VAT 0%",
+    "changes": [
+      {
+        "field": "vat_rate",
+        "value": "23",
+        "evidence": "23%"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "previous-negated-contact",
+    "mode": "scalar",
+    "message": "Do not change customer contact to 0897654321",
+    "changes": [
+      {
+        "field": "customer_details",
+        "value": "0897654321",
+        "evidence": "0897654321"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "previous-negated-name",
+    "mode": "scalar",
+    "message": "Do not change customer name to Jack",
+    "changes": [
+      {
+        "field": "customer_name",
+        "value": "Jack",
+        "evidence": "Jack"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "previous-negated-work",
+    "mode": "scalar",
+    "message": "Do not change work description to maintenance",
+    "changes": [
+      {
+        "field": "work_description",
+        "value": "maintenance",
+        "evidence": "maintenance"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "previous-number-amount-25",
+    "mode": "scalar",
+    "message": "The address is 25 Main Street.",
+    "changes": [
+      {
+        "field": "amount",
+        "value": "25",
+        "evidence": "25"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "previous-number-amount-3",
+    "mode": "scalar",
+    "message": "There are 3 valves.",
+    "changes": [
+      {
+        "field": "amount",
+        "value": "3",
+        "evidence": "3"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "previous-number-amount-500",
+    "mode": "scalar",
+    "message": "Invoice reference 500.",
+    "changes": [
+      {
+        "field": "amount",
+        "value": "500",
+        "evidence": "500"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "previous-number-amount-8",
+    "mode": "scalar",
+    "message": "The job took 8 hours.",
+    "changes": [
+      {
+        "field": "amount",
+        "value": "8",
+        "evidence": "8"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "previous-number-labour-25",
+    "mode": "scalar",
+    "message": "The address is 25 Main Street.",
+    "changes": [
+      {
+        "field": "labour",
+        "value": "25",
+        "evidence": "25"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "previous-number-labour-3",
+    "mode": "scalar",
+    "message": "There are 3 valves.",
+    "changes": [
+      {
+        "field": "labour",
+        "value": "3",
+        "evidence": "3"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "previous-number-labour-500",
+    "mode": "scalar",
+    "message": "Invoice reference 500.",
+    "changes": [
+      {
+        "field": "labour",
+        "value": "500",
+        "evidence": "500"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "previous-number-labour-8",
+    "mode": "scalar",
+    "message": "The job took 8 hours.",
+    "changes": [
+      {
+        "field": "labour",
+        "value": "8",
+        "evidence": "8"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "previous-number-materials-25",
+    "mode": "scalar",
+    "message": "The address is 25 Main Street.",
+    "changes": [
+      {
+        "field": "materials",
+        "value": "25",
+        "evidence": "25"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "previous-number-materials-3",
+    "mode": "scalar",
+    "message": "There are 3 valves.",
+    "changes": [
+      {
+        "field": "materials",
+        "value": "3",
+        "evidence": "3"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "previous-number-materials-500",
+    "mode": "scalar",
+    "message": "Invoice reference 500.",
+    "changes": [
+      {
+        "field": "materials",
+        "value": "500",
+        "evidence": "500"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "previous-number-materials-8",
+    "mode": "scalar",
+    "message": "The job took 8 hours.",
+    "changes": [
+      {
+        "field": "materials",
+        "value": "8",
+        "evidence": "8"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "boundary-vat-tail-0",
+    "mode": "vat",
+    "message": "Use VAT 23%. This invoice update has been withdrawn.",
+    "changes": [
+      {
+        "field": "vat_rate",
+        "value": "23",
+        "evidence": "23%"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "boundary-vat-tail-1",
+    "mode": "vat",
+    "message": "Use VAT 23%. It is not approved.",
+    "changes": [
+      {
+        "field": "vat_rate",
+        "value": "23",
+        "evidence": "23%"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "boundary-vat-tail-2",
+    "mode": "vat",
+    "message": "Use VAT 23%. The VAT change is a suggestion.",
+    "changes": [
+      {
+        "field": "vat_rate",
+        "value": "23",
+        "evidence": "23%"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "boundary-vat-tail-3",
+    "mode": "vat",
+    "message": "Use VAT 23%. Keep the customer name unchanged while waiting for my approval.",
+    "changes": [
+      {
+        "field": "vat_rate",
+        "value": "23",
+        "evidence": "23%"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "boundary-vat-tail-4",
+    "mode": "vat",
+    "message": "Use VAT 23%. VAT 23% is a suggestion from the customer.",
+    "changes": [
+      {
+        "field": "vat_rate",
+        "value": "23",
+        "evidence": "23%"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "boundary-preserved-unrelated",
+    "mode": "scalar",
+    "message": "Set amount €500, wait for approval and keep materials unchanged.",
+    "changes": [
+      {
+        "field": "amount",
+        "value": "500",
+        "evidence": "€500"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "boundary-customer-number",
+    "mode": "scalar",
+    "message": "The customer suggested labour €500.",
+    "changes": [
+      {
+        "field": "labour",
+        "value": "500",
+        "evidence": "€500"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "boundary-text-number",
+    "mode": "scalar",
+    "message": "Work description: amount €500.",
+    "changes": [
+      {
+        "field": "amount",
+        "value": "500",
+        "evidence": "€500"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "boundary-text-vat",
+    "mode": "vat",
+    "message": "Work description: Use VAT 23%.",
+    "changes": [
+      {
+        "field": "vat_rate",
+        "value": "23",
+        "evidence": "23%"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "boundary-reported-invoice",
+    "mode": "scalar",
+    "message": "Invoice code was €500.",
+    "changes": [
+      {
+        "field": "amount",
+        "value": "500",
+        "evidence": "€500"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "boundary-text-denial-0",
+    "mode": "vat",
+    "message": "Customer name: Nora Flynn. Customer name is not Nora Flynn.",
+    "changes": [
+      {
+        "field": "customer_name",
+        "value": "Nora Flynn",
+        "evidence": "Nora Flynn"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "boundary-text-past-0",
+    "mode": "vat",
+    "message": "Customer name was Nora Flynn.",
+    "changes": [
+      {
+        "field": "customer_name",
+        "value": "Nora Flynn",
+        "evidence": "Nora Flynn"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "boundary-text-year-0",
+    "mode": "vat",
+    "message": "2025 invoice:\nCustomer name: Nora Flynn",
+    "changes": [
+      {
+        "field": "customer_name",
+        "value": "Nora Flynn",
+        "evidence": "Nora Flynn"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "boundary-text-denial-1",
+    "mode": "vat",
+    "message": "Work description: boiler replacement. Work description is not boiler replacement.",
+    "changes": [
+      {
+        "field": "work_description",
+        "value": "boiler replacement",
+        "evidence": "boiler replacement"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "boundary-text-past-1",
+    "mode": "vat",
+    "message": "Work description was boiler replacement.",
+    "changes": [
+      {
+        "field": "work_description",
+        "value": "boiler replacement",
+        "evidence": "boiler replacement"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "boundary-text-year-1",
+    "mode": "vat",
+    "message": "2025 invoice:\nWork description: boiler replacement",
+    "changes": [
+      {
+        "field": "work_description",
+        "value": "boiler replacement",
+        "evidence": "boiler replacement"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "boundary-text-denial-2",
+    "mode": "vat",
+    "message": "Customer address: 19 River Road. Customer address is not 19 River Road.",
+    "changes": [
+      {
+        "field": "customer_details",
+        "value": "19 River Road",
+        "evidence": "19 River Road"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "boundary-text-past-2",
+    "mode": "vat",
+    "message": "Customer address was 19 River Road.",
+    "changes": [
+      {
+        "field": "customer_details",
+        "value": "19 River Road",
+        "evidence": "19 River Road"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "boundary-text-year-2",
+    "mode": "vat",
+    "message": "2025 invoice:\nCustomer address: 19 River Road",
+    "changes": [
+      {
+        "field": "customer_details",
+        "value": "19 River Road",
+        "evidence": "19 River Road"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "boundary-past-current-positive",
+    "mode": "vat",
+    "message": "The previous invoice was VAT 0%. This invoice uses VAT 23%.",
+    "changes": [
+      {
+        "field": "vat_rate",
+        "value": "23",
+        "evidence": "23%"
+      }
+    ],
+    "patches": [],
+    "positive": true
+  },
+  {
+    "label": "boundary-current-positive",
+    "mode": "vat",
+    "message": "The invoice being prepared uses VAT 23%.",
+    "changes": [
+      {
+        "field": "vat_rate",
+        "value": "23",
+        "evidence": "23%"
+      }
+    ],
+    "patches": [],
+    "positive": true
+  },
+  {
+    "label": "text-name_postpone",
+    "mode": "vat",
+    "message": "Change customer name to Nora Flynn. Hold off applying that until I confirm.",
+    "changes": [
+      {
+        "field": "customer_name",
+        "value": "Nora Flynn",
+        "evidence": "Nora Flynn"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "text-name_forget",
+    "mode": "vat",
+    "message": "Change customer name to Nora Flynn. Actually, forget the whole request.",
+    "changes": [
+      {
+        "field": "customer_name",
+        "value": "Nora Flynn",
+        "evidence": "Nora Flynn"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "text-name_defer",
+    "mode": "vat",
+    "message": "Change customer name to Nora Flynn. That is a draft suggestion pending approval.",
+    "changes": [
+      {
+        "field": "customer_name",
+        "value": "Nora Flynn",
+        "evidence": "Nora Flynn"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "text-name_payer",
+    "mode": "vat",
+    "message": "Change customer name to Nora Flynn. Nora is the payer though; keep John as the customer.",
+    "changes": [
+      {
+        "field": "customer_name",
+        "value": "Nora Flynn",
+        "evidence": "Nora Flynn"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "text-name_not_approved",
+    "mode": "vat",
+    "message": "Change customer name to Nora Flynn. This has not been approved.",
+    "changes": [
+      {
+        "field": "customer_name",
+        "value": "Nora Flynn",
+        "evidence": "Nora Flynn"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "text-name_hypothetical",
+    "mode": "vat",
+    "message": "Change customer name to Nora Flynn. That was hypothetical.",
+    "changes": [
+      {
+        "field": "customer_name",
+        "value": "Nora Flynn",
+        "evidence": "Nora Flynn"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "text-name_third_party",
+    "mode": "vat",
+    "message": "Nora texted: “change customer name to Nora Flynn”. I am forwarding this for discussion; nothing is approved.",
+    "changes": [
+      {
+        "field": "customer_name",
+        "value": "Nora Flynn",
+        "evidence": "Nora Flynn"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "text-address_postpone",
+    "mode": "vat",
+    "message": "Change customer address to 19 River Road. Hold off applying that until I confirm.",
+    "changes": [
+      {
+        "field": "customer_details",
+        "value": "19 River Road",
+        "evidence": "19 River Road"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "text-address_forget",
+    "mode": "vat",
+    "message": "Change customer address to 19 River Road. Actually, forget the whole request.",
+    "changes": [
+      {
+        "field": "customer_details",
+        "value": "19 River Road",
+        "evidence": "19 River Road"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "text-address_old_property",
+    "mode": "vat",
+    "message": "Change customer address to 19 River Road. That was the old property; this is just background.",
+    "changes": [
+      {
+        "field": "customer_details",
+        "value": "19 River Road",
+        "evidence": "19 River Road"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "text-work_postpone",
+    "mode": "vat",
+    "message": "Change work description to annual boiler inspection. Hold off applying that until I confirm.",
+    "changes": [
+      {
+        "field": "work_description",
+        "value": "annual boiler inspection",
+        "evidence": "annual boiler inspection"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "text-work_forget",
+    "mode": "vat",
+    "message": "Change work description to annual boiler inspection. Actually, forget the whole request.",
+    "changes": [
+      {
+        "field": "work_description",
+        "value": "annual boiler inspection",
+        "evidence": "annual boiler inspection"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "text-work_cancel_example",
+    "mode": "vat",
+    "message": "Change work description to annual boiler inspection. That wording is an example, not approval.",
+    "changes": [
+      {
+        "field": "work_description",
+        "value": "annual boiler inspection",
+        "evidence": "annual boiler inspection"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "text-contact_postpone",
+    "mode": "vat",
+    "message": "Change customer details to 0897654321. Hold off applying that until I confirm.",
+    "changes": [
+      {
+        "field": "customer_details",
+        "value": "0897654321",
+        "evidence": "0897654321"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "text-contact_supplier",
+    "mode": "vat",
+    "message": "Change customer details to 0897654321. That is the supplier contact, not the customer.",
+    "changes": [
+      {
+        "field": "customer_details",
+        "value": "0897654321",
+        "evidence": "0897654321"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "text-name_positive",
+    "mode": "vat",
+    "message": "Change customer name to Nora Flynn.",
+    "changes": [
+      {
+        "field": "customer_name",
+        "value": "Nora Flynn",
+        "evidence": "Nora Flynn"
+      }
+    ],
+    "patches": [],
+    "positive": true
+  },
+  {
+    "label": "text-address_positive",
+    "mode": "vat",
+    "message": "Change customer address to 19 River Road.",
+    "changes": [
+      {
+        "field": "customer_details",
+        "value": "19 River Road",
+        "evidence": "19 River Road"
+      }
+    ],
+    "patches": [],
+    "positive": true
+  },
+  {
+    "label": "text-work_positive",
+    "mode": "vat",
+    "message": "Change work description to annual boiler inspection.",
+    "changes": [
+      {
+        "field": "work_description",
+        "value": "annual boiler inspection",
+        "evidence": "annual boiler inspection"
+      }
+    ],
+    "patches": [],
+    "positive": true
+  },
+  {
+    "label": "text-contact_positive",
+    "mode": "vat",
+    "message": "Change customer details to 0897654321.",
+    "changes": [
+      {
+        "field": "customer_details",
+        "value": "0897654321",
+        "evidence": "0897654321"
+      }
+    ],
+    "patches": [],
+    "positive": true
+  },
+  {
+    "label": "text-past_name",
+    "mode": "vat",
+    "message": "Customer name was Nora Flynn.",
+    "changes": [
+      {
+        "field": "customer_name",
+        "value": "Nora Flynn",
+        "evidence": "Nora Flynn"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "text-past_work",
+    "mode": "vat",
+    "message": "Work description was boiler replacement.",
+    "changes": [
+      {
+        "field": "work_description",
+        "value": "boiler replacement",
+        "evidence": "boiler replacement"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "text-past_contact",
+    "mode": "vat",
+    "message": "Customer details were 0897654321.",
+    "changes": [
+      {
+        "field": "customer_details",
+        "value": "0897654321",
+        "evidence": "0897654321"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "text-past_address",
+    "mode": "vat",
+    "message": "Customer address was 19 River Road.",
+    "changes": [
+      {
+        "field": "customer_details",
+        "value": "19 River Road",
+        "evidence": "19 River Road"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "text-past_name_explicit_no_update",
+    "mode": "vat",
+    "message": "Customer name was Nora Flynn. This is background for a dispute, not an update.",
+    "changes": [
+      {
+        "field": "customer_name",
+        "value": "Nora Flynn",
+        "evidence": "Nora Flynn"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "text-quote_name",
+    "mode": "vat",
+    "message": "For reference only:\nCustomer name: Nora Flynn\nThis is an archived customer, not the current recipient.",
+    "changes": [
+      {
+        "field": "customer_name",
+        "value": "Nora Flynn",
+        "evidence": "Nora Flynn"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "text-quote_name2",
+    "mode": "vat",
+    "message": "Archive copy:\nCustomer name: Nora Flynn\nThis belongs to the invoice from last year.",
+    "changes": [
+      {
+        "field": "customer_name",
+        "value": "Nora Flynn",
+        "evidence": "Nora Flynn"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "text-year_scope_name",
+    "mode": "vat",
+    "message": "2025 invoice:\nCustomer name: Nora Flynn",
+    "changes": [
+      {
+        "field": "customer_name",
+        "value": "Nora Flynn",
+        "evidence": "Nora Flynn"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "text-another_doc_name",
+    "mode": "vat",
+    "message": "The other invoice:\nCustomer name: Nora Flynn",
+    "changes": [
+      {
+        "field": "customer_name",
+        "value": "Nora Flynn",
+        "evidence": "Nora Flynn"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "text-customer_question_later",
+    "mode": "vat",
+    "message": "Customer name: Nora Flynn. Is that correct? I have not checked.",
+    "changes": [
+      {
+        "field": "customer_name",
+        "value": "Nora Flynn",
+        "evidence": "Nora Flynn"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "text-negated_name_later",
+    "mode": "vat",
+    "message": "Customer name: Nora Flynn. That is not the customer on this invoice.",
+    "changes": [
+      {
+        "field": "customer_name",
+        "value": "Nora Flynn",
+        "evidence": "Nora Flynn"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "text-negated_work_later",
+    "mode": "vat",
+    "message": "Work description: boiler replacement. That is not what was done on this job.",
+    "changes": [
+      {
+        "field": "work_description",
+        "value": "boiler replacement",
+        "evidence": "boiler replacement"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "text-negated_address_later",
+    "mode": "vat",
+    "message": "Customer address: 19 River Road. That is not the address for this invoice.",
+    "changes": [
+      {
+        "field": "customer_details",
+        "value": "19 River Road",
+        "evidence": "19 River Road"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "text-dotted_abbreviation_work",
+    "mode": "vat",
+    "message": "Set work description to annual inspection. e.g. boiler replacement.",
+    "changes": [
+      {
+        "field": "work_description",
+        "value": "boiler replacement",
+        "evidence": "boiler replacement"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "text-later_work_narrative",
+    "mode": "vat",
+    "message": "Please review the wording. The customer denied boiler replacement.",
+    "changes": [
+      {
+        "field": "work_description",
+        "value": "boiler replacement",
+        "evidence": "boiler replacement"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "boundary-soft-continuation-0",
+    "mode": "vat",
+    "message": "Use VAT 23%, the old invoice was VAT 0%, wait for my approval before saving.",
+    "changes": [
+      {
+        "field": "vat_rate",
+        "value": "23",
+        "evidence": "23%"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "boundary-soft-continuation-1",
+    "mode": "vat",
+    "message": "Use VAT 23%. For John, wait for my approval.",
+    "changes": [
+      {
+        "field": "vat_rate",
+        "value": "23",
+        "evidence": "23%"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "boundary-soft-continuation-2",
+    "mode": "vat",
+    "message": "Use VAT 23%. Wait for my approval, customer name: Nora Flynn.",
+    "changes": [
+      {
+        "field": "vat_rate",
+        "value": "23",
+        "evidence": "23%"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "boundary-soft-continuation-3",
+    "mode": "vat",
+    "message": "Use VAT 23%. Customer name: Nora Flynn, wait for my approval.",
+    "changes": [
+      {
+        "field": "vat_rate",
+        "value": "23",
+        "evidence": "23%"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "boundary-unmarked-customer-suggestion",
+    "mode": "vat",
+    "message": "Customer suggested Nora Flynn.",
+    "changes": [
+      {
+        "field": "customer_name",
+        "value": "suggested Nora Flynn",
+        "evidence": "suggested Nora Flynn"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "boundary-unmarked-customer-request",
+    "mode": "vat",
+    "message": "Customer requested Nora Flynn.",
+    "changes": [
+      {
+        "field": "customer_name",
+        "value": "requested Nora Flynn",
+        "evidence": "requested Nora Flynn"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "boundary-unmarked-work-report",
+    "mode": "vat",
+    "message": "Work description might be boiler replacement.",
+    "changes": [
+      {
+        "field": "work_description",
+        "value": "might be boiler replacement",
+        "evidence": "might be boiler replacement"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "boundary-year-only-heading",
+    "mode": "vat",
+    "message": "2025:\nCustomer name: Nora Flynn",
+    "changes": [
+      {
+        "field": "customer_name",
+        "value": "Nora Flynn",
+        "evidence": "Nora Flynn"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "boundary-document-customer-report",
+    "mode": "vat",
+    "message": "This invoice customer suggests Nora Flynn.",
+    "changes": [
+      {
+        "field": "customer_name",
+        "value": "suggests Nora Flynn",
+        "evidence": "suggests Nora Flynn"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "boundary-reported-command",
+    "mode": "vat",
+    "message": "Someone requested change customer name to Nora Flynn.",
+    "changes": [
+      {
+        "field": "customer_name",
+        "value": "Nora Flynn",
+        "evidence": "Nora Flynn"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "boundary-unlabelled-later-work",
+    "mode": "vat",
+    "message": "Use VAT 23%. Wait for my approval.",
+    "changes": [
+      {
+        "field": "work_description",
+        "value": "Wait for my approval",
+        "evidence": "Wait for my approval"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "boundary-invoice-year-reference",
+    "mode": "vat",
+    "message": "Invoice from 2025 for boiler replacement.",
+    "changes": [
+      {
+        "field": "work_description",
+        "value": "boiler replacement",
+        "evidence": "boiler replacement"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "captured-contact-defer",
+    "mode": "scalar",
+    "message": "Customer details: 19 River Road; hold that change.",
+    "changes": [
+      {
+        "field": "customer_details",
+        "value": "19 River Road; hold that change",
+        "evidence": "Customer details: 19 River Road; hold that change."
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "captured-contact-amount",
+    "mode": "scalar",
+    "message": "Customer details: 19 River Road; €700.",
+    "changes": [
+      {
+        "field": "customer_details",
+        "value": "19 River Road; €700",
+        "evidence": "Customer details: 19 River Road; €700."
+      },
+      {
+        "field": "amount",
+        "value": "700",
+        "evidence": "Customer details: 19 River Road; €700."
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "contact-then-defer",
+    "mode": "scalar",
+    "message": "Amount €700. Customer details: 19 River Road; hold that change.",
+    "changes": [
+      {
+        "field": "customer_details",
+        "value": "19 River Road",
+        "evidence": "Amount €700. Customer details: 19 River Road; hold that change."
+      },
+      {
+        "field": "amount",
+        "value": "700",
+        "evidence": "Amount €700. Customer details: 19 River Road; hold that change."
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "contact-then-history",
+    "mode": "scalar",
+    "message": "Amount €700. Customer details: 19 River Road; this was only a suggestion.",
+    "changes": [
+      {
+        "field": "customer_details",
+        "value": "19 River Road",
+        "evidence": "Amount €700. Customer details: 19 River Road; this was only a suggestion."
+      },
+      {
+        "field": "amount",
+        "value": "700",
+        "evidence": "Amount €700. Customer details: 19 River Road; this was only a suggestion."
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "captured-contact-negated",
+    "mode": "scalar",
+    "message": "Customer details: 19 River Road; not for this invoice.",
+    "changes": [
+      {
+        "field": "customer_details",
+        "value": "19 River Road; not for this invoice",
+        "evidence": "Customer details: 19 River Road; not for this invoice."
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "captured-work-amount",
+    "mode": "scalar",
+    "message": "Work description: boiler repairs; €700.",
+    "changes": [
+      {
+        "field": "work_description",
+        "value": "boiler repairs; €700",
+        "evidence": "Work description: boiler repairs; €700."
+      },
+      {
+        "field": "amount",
+        "value": "700",
+        "evidence": "Work description: boiler repairs; €700."
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "positive-semicolon-contact-and-amount",
+    "mode": "scalar",
+    "message": "Customer details: 19 River Road; 01 555 0123; office@example.test; amount €700.",
+    "changes": [
+      {
+        "field": "customer_details",
+        "value": "19 River Road; 01 555 0123; office@example.test",
+        "evidence": "Customer details: 19 River Road; 01 555 0123; office@example.test; amount €700."
+      },
+      {
+        "field": "amount",
+        "value": "700",
+        "evidence": "€700"
+      }
+    ],
+    "patches": [],
+    "positive": true
+  }
+]

@@ -1,13 +1,24 @@
 """Typed, secret-safe process configuration."""
 
 import re
+from decimal import Decimal
 from functools import lru_cache
+from typing import Literal
 from urllib.parse import parse_qsl, urlsplit
+from uuid import UUID
 
-from pydantic import Field, SecretStr, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from anoifig.db.connection_config import Environment, validate_database_url
+
+
+class TaraBudget(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    requests: int = Field(default=100, ge=0, le=100000)
+    tokens: int = Field(default=1000000, ge=0, le=1000000000)
+    cost_usd: Decimal = Field(default=Decimal("5"), ge=0, le=10000, allow_inf_nan=False)
 
 
 class Settings(BaseSettings):
@@ -36,6 +47,34 @@ class Settings(BaseSettings):
     twilio_inbound_url: str | None = None
     twilio_status_url: str | None = None
     twilio_http_timeout: int = Field(default=10, ge=1, le=30)
+
+    # Local acknowledgement is explicit in Compose; production must select OpenAI.
+    tara_mode: Literal["acknowledgement", "mock", "openai"] = "acknowledgement"
+    openai_api_key: SecretStr | None = None
+    tara_model: str = Field(default="gpt-4.1-mini", min_length=1, max_length=100)
+    tara_timeout_seconds: int = Field(default=15, ge=1, le=30)
+    tara_deadline_seconds: int = Field(default=60, ge=1, le=90)
+    tara_max_retries: int = Field(default=1, ge=0, le=2)
+    tara_max_input_tokens: int = Field(default=16000, ge=1000, le=64000)
+    tara_max_output_tokens: int = Field(default=1200, ge=128, le=4000)
+    tara_history_messages: int = Field(default=8, ge=0, le=30)
+    tara_memory_days: int = Field(default=30, ge=1, le=90)
+    tara_daily_budget: TaraBudget = Field(default_factory=TaraBudget)
+    tara_business_budgets: dict[UUID, TaraBudget] = Field(default_factory=dict)
+    # USD per million tokens. Supply reviewed current rates before live use.
+    tara_input_price_usd: Decimal = Field(default=Decimal("0"), ge=0, le=1000, allow_inf_nan=False)
+    tara_output_price_usd: Decimal = Field(default=Decimal("0"), ge=0, le=1000, allow_inf_nan=False)
+
+    @model_validator(mode="after")
+    def validate_tara_configuration(self) -> "Settings":
+        if self.environment == "production" and self.tara_mode == "mock":
+            raise ValueError("mock AI is forbidden in production")
+        if self.tara_mode == "openai":
+            if self.openai_api_key is None or not self.openai_api_key.get_secret_value().strip():
+                raise ValueError("OpenAI mode requires a securely supplied API key")
+            if self.tara_input_price_usd <= 0 or self.tara_output_price_usd <= 0:
+                raise ValueError("OpenAI mode requires reviewed positive token prices")
+        return self
 
     @field_validator("database_url")
     @classmethod

@@ -91,6 +91,21 @@ class Message(TimestampMixin, Base):
     __table_args__ = (
         UniqueConstraint("tenant_id", "id", name="uq_messages_tenant_id_id"),
         UniqueConstraint("tenant_id", "id", "phone_link_id", name="uq_messages_tenant_id_id_link"),
+        UniqueConstraint(
+            "tenant_id",
+            "id",
+            "conversation_id",
+            "user_id",
+            name="uq_messages_tenant_id_id_conversation_user",
+        ),
+        Index(
+            "ix_messages_pending_conversation",
+            "tenant_id",
+            "conversation_id",
+            "received_at",
+            "id",
+            postgresql_where=text("direction = 'inbound' AND processed_at IS NULL"),
+        ),
         UniqueConstraint("twilio_sid", name="uq_messages_twilio_sid"),
         UniqueConstraint("reply_to_id", name="uq_messages_reply_to_id"),
         ForeignKeyConstraint(
@@ -111,6 +126,7 @@ class Message(TimestampMixin, Base):
         CheckConstraint("account_sid ~ '^AC[0-9a-fA-F]{32}$'", name="valid_account_sid"),
         CheckConstraint("reply_to_id IS NULL OR direction = 'outbound'", name="valid_reply"),
         CheckConstraint("processing_attempts >= 0", name="nonnegative_processing_attempts"),
+        CheckConstraint("conversation_version >= 0", name="valid_conversation_version"),
         Index("ix_messages_tenant_conversation", "tenant_id", "conversation_id"),
     )
 
@@ -125,6 +141,7 @@ class Message(TimestampMixin, Base):
     account_sid: Mapped[str] = mapped_column(String(34), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, server_default="received")
     processing_error: Mapped[str | None] = mapped_column(String(64))
+    conversation_version: Mapped[int | None] = mapped_column(Integer)
     received_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

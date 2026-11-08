@@ -59,5 +59,7 @@ jobs:
         run: uv run --frozen mypy src
       - name: Unit and PostgreSQL isolation tests
         run: uv run --frozen pytest -ra
+      - name: Audit Python security patterns
+        run: uv run --frozen bandit -r src -q
       - name: Audit locked dependencies against OSV advisories
         run: uv audit --locked

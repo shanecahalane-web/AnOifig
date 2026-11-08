@@ -1,0 +1,1520 @@
+[
+  {
+    "label": "later_repudiation_amount",
+    "mode": "scalar",
+    "message": "Set amount €700. That is wrong.",
+    "changes": [
+      {
+        "field": "amount",
+        "value": "700",
+        "evidence": "Set amount €700"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "later_repudiation_customer_name",
+    "mode": "scalar",
+    "message": "Set customer to Mary. That is wrong.",
+    "changes": [
+      {
+        "field": "customer_name",
+        "value": "Mary",
+        "evidence": "Set customer to Mary"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "later_repudiation_work_description",
+    "mode": "scalar",
+    "message": "Set description to installation. That is wrong.",
+    "changes": [
+      {
+        "field": "work_description",
+        "value": "installation",
+        "evidence": "Set description to installation"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "later_repudiation_customer_details",
+    "mode": "scalar",
+    "message": "Set address to 2 Pine Road. That is wrong.",
+    "changes": [
+      {
+        "field": "customer_details",
+        "value": "2 Pine Road",
+        "evidence": "Set address to 2 Pine Road"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "later_repudiation_vat_rate",
+    "mode": "vat",
+    "message": "VAT rate is 23%. That is wrong.",
+    "changes": [
+      {
+        "field": "vat_rate",
+        "value": "23",
+        "evidence": "VAT rate is 23%"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "later_repudiation_vat_basis",
+    "mode": "vat",
+    "message": "including VAT. That is wrong.",
+    "changes": [
+      {
+        "field": "vat_basis",
+        "value": "inclusive",
+        "evidence": "including VAT"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "retroactive_history_amount",
+    "mode": "scalar",
+    "message": "Set amount €700. That is for the previous job.",
+    "changes": [
+      {
+        "field": "amount",
+        "value": "700",
+        "evidence": "Set amount €700"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "retroactive_history_customer_name",
+    "mode": "scalar",
+    "message": "Set customer to Mary. That is for the previous job.",
+    "changes": [
+      {
+        "field": "customer_name",
+        "value": "Mary",
+        "evidence": "Set customer to Mary"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "retroactive_history_work_description",
+    "mode": "scalar",
+    "message": "Set description to installation. That is for the previous job.",
+    "changes": [
+      {
+        "field": "work_description",
+        "value": "installation",
+        "evidence": "Set description to installation"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "retroactive_history_customer_details",
+    "mode": "scalar",
+    "message": "Set address to 2 Pine Road. That is for the previous job.",
+    "changes": [
+      {
+        "field": "customer_details",
+        "value": "2 Pine Road",
+        "evidence": "Set address to 2 Pine Road"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "retroactive_history_vat_rate",
+    "mode": "vat",
+    "message": "VAT rate is 23%. That is for the previous job.",
+    "changes": [
+      {
+        "field": "vat_rate",
+        "value": "23",
+        "evidence": "VAT rate is 23%"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "retroactive_history_vat_basis",
+    "mode": "vat",
+    "message": "including VAT. That is for the previous job.",
+    "changes": [
+      {
+        "field": "vat_basis",
+        "value": "inclusive",
+        "evidence": "including VAT"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "historical_scope_bleed_amount",
+    "mode": "scalar",
+    "message": "Set amount €700. The old invoice is irrelevant, cancel this change.",
+    "changes": [
+      {
+        "field": "amount",
+        "value": "700",
+        "evidence": "Set amount €700"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "historical_scope_bleed_customer_name",
+    "mode": "scalar",
+    "message": "Set customer to Mary. The old invoice is irrelevant, cancel this change.",
+    "changes": [
+      {
+        "field": "customer_name",
+        "value": "Mary",
+        "evidence": "Set customer to Mary"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "historical_scope_bleed_work_description",
+    "mode": "scalar",
+    "message": "Set description to installation. The old invoice is irrelevant, cancel this change.",
+    "changes": [
+      {
+        "field": "work_description",
+        "value": "installation",
+        "evidence": "Set description to installation"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "historical_scope_bleed_customer_details",
+    "mode": "scalar",
+    "message": "Set address to 2 Pine Road. The old invoice is irrelevant, cancel this change.",
+    "changes": [
+      {
+        "field": "customer_details",
+        "value": "2 Pine Road",
+        "evidence": "Set address to 2 Pine Road"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "historical_scope_bleed_vat_rate",
+    "mode": "vat",
+    "message": "VAT rate is 23%. The old invoice is irrelevant, cancel this change.",
+    "changes": [
+      {
+        "field": "vat_rate",
+        "value": "23",
+        "evidence": "VAT rate is 23%"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "historical_scope_bleed_vat_basis",
+    "mode": "vat",
+    "message": "including VAT. The old invoice is irrelevant, cancel this change.",
+    "changes": [
+      {
+        "field": "vat_basis",
+        "value": "inclusive",
+        "evidence": "including VAT"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "invoice_issued",
+    "mode": "scalar",
+    "message": "Invoice issued to John €700.",
+    "changes": [
+      {
+        "field": "amount",
+        "value": "700",
+        "evidence": "700"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "invoice_sent",
+    "mode": "scalar",
+    "message": "Invoice sent to John €700.",
+    "changes": [
+      {
+        "field": "amount",
+        "value": "700",
+        "evidence": "700"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "invoice_paid",
+    "mode": "scalar",
+    "message": "Invoice paid by John €700.",
+    "changes": [
+      {
+        "field": "amount",
+        "value": "700",
+        "evidence": "700"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "invoice_discussed",
+    "mode": "scalar",
+    "message": "Invoice discussed with John €700.",
+    "changes": [
+      {
+        "field": "amount",
+        "value": "700",
+        "evidence": "700"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "invoice_last_year",
+    "mode": "scalar",
+    "message": "Invoice last year €700.",
+    "changes": [
+      {
+        "field": "amount",
+        "value": "700",
+        "evidence": "700"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "rename_question",
+    "mode": "items",
+    "message": "Rename valves to taps?",
+    "changes": [],
+    "patches": [
+      {
+        "index": 0,
+        "description": "valves",
+        "evidence": "Rename valves to taps?",
+        "changes": [
+          {
+            "field": "description",
+            "value": "taps",
+            "evidence": "Rename valves to taps?"
+          }
+        ]
+      }
+    ],
+    "positive": false
+  },
+  {
+    "label": "rename_history",
+    "mode": "items",
+    "message": "The old invoice: rename valves to taps.",
+    "changes": [],
+    "patches": [
+      {
+        "index": 0,
+        "description": "valves",
+        "evidence": "The old invoice: rename valves to taps.",
+        "changes": [
+          {
+            "field": "description",
+            "value": "taps",
+            "evidence": "The old invoice: rename valves to taps."
+          }
+        ]
+      }
+    ],
+    "positive": false
+  },
+  {
+    "label": "rename_report",
+    "mode": "items",
+    "message": "The previous job called valves taps.",
+    "changes": [],
+    "patches": [
+      {
+        "index": 0,
+        "description": "valves",
+        "evidence": "The previous job called valves taps.",
+        "changes": [
+          {
+            "field": "description",
+            "value": "taps",
+            "evidence": "The previous job called valves taps."
+          }
+        ]
+      }
+    ],
+    "positive": false
+  },
+  {
+    "label": "rename_noncommand",
+    "mode": "items",
+    "message": "valves for boiler repairs.",
+    "changes": [],
+    "patches": [
+      {
+        "index": 0,
+        "description": "valves",
+        "evidence": "valves for boiler repairs.",
+        "changes": [
+          {
+            "field": "description",
+            "value": "boiler repairs",
+            "evidence": "valves for boiler repairs."
+          }
+        ]
+      }
+    ],
+    "positive": false
+  },
+  {
+    "label": "boundary-qualification-0",
+    "mode": "scalar",
+    "message": "Set amount €700. It is incorrect.",
+    "changes": [
+      {
+        "field": "amount",
+        "value": "700",
+        "evidence": "Set amount €700"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "boundary-qualification-1",
+    "mode": "scalar",
+    "message": "Set amount €700. That amount is wrong.",
+    "changes": [
+      {
+        "field": "amount",
+        "value": "700",
+        "evidence": "Set amount €700"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "boundary-qualification-2",
+    "mode": "scalar",
+    "message": "Set amount €700. The amount is wrong.",
+    "changes": [
+      {
+        "field": "amount",
+        "value": "700",
+        "evidence": "Set amount €700"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "boundary-qualification-3",
+    "mode": "scalar",
+    "message": "Set amount €700. That is clearly invalid.",
+    "changes": [
+      {
+        "field": "amount",
+        "value": "700",
+        "evidence": "Set amount €700"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "boundary-qualification-4",
+    "mode": "scalar",
+    "message": "Set amount €700. That was for the earlier bill.",
+    "changes": [
+      {
+        "field": "amount",
+        "value": "700",
+        "evidence": "Set amount €700"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "boundary-qualification-5",
+    "mode": "scalar",
+    "message": "Set amount €700. That amount is for the old invoice.",
+    "changes": [
+      {
+        "field": "amount",
+        "value": "700",
+        "evidence": "Set amount €700"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "boundary-qualification-6",
+    "mode": "scalar",
+    "message": "Set amount €700. The amount is for the previous job.",
+    "changes": [
+      {
+        "field": "amount",
+        "value": "700",
+        "evidence": "Set amount €700"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "boundary-qualification-7",
+    "mode": "scalar",
+    "message": "Set amount €700. That is wrong?",
+    "changes": [
+      {
+        "field": "amount",
+        "value": "700",
+        "evidence": "Set amount €700"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "boundary-cancellation-0",
+    "mode": "scalar",
+    "message": "Set amount €700. The old invoice is irrelevant, but cancel this change.",
+    "changes": [
+      {
+        "field": "amount",
+        "value": "700",
+        "evidence": "Set amount €700"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "boundary-cancellation-1",
+    "mode": "scalar",
+    "message": "Set amount €700. The previous bill is irrelevant and cancel this change.",
+    "changes": [
+      {
+        "field": "amount",
+        "value": "700",
+        "evidence": "Set amount €700"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "boundary-cancellation-2",
+    "mode": "scalar",
+    "message": "Set amount €700. The old invoice is irrelevant, please cancel this change.",
+    "changes": [
+      {
+        "field": "amount",
+        "value": "700",
+        "evidence": "Set amount €700"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "boundary-cancellation-3",
+    "mode": "scalar",
+    "message": "Set amount €700. The old invoice is irrelevant, actually cancel this change.",
+    "changes": [
+      {
+        "field": "amount",
+        "value": "700",
+        "evidence": "Set amount €700"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "boundary-cancellation-4",
+    "mode": "scalar",
+    "message": "Set amount €700. The old invoice:\nCancel this change.",
+    "changes": [
+      {
+        "field": "amount",
+        "value": "700",
+        "evidence": "Set amount €700"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "boundary-cancellation-5",
+    "mode": "scalar",
+    "message": "Set amount €700. The old invoice is irrelevant; cancel this change.",
+    "changes": [
+      {
+        "field": "amount",
+        "value": "700",
+        "evidence": "Set amount €700"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "boundary-cancellation-6",
+    "mode": "scalar",
+    "message": "Set amount €700. The old invoice is irrelevant, do not apply this change.",
+    "changes": [
+      {
+        "field": "amount",
+        "value": "700",
+        "evidence": "Set amount €700"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "boundary-status-0",
+    "mode": "scalar",
+    "message": "Invoice has been issued to John €700.",
+    "changes": [
+      {
+        "field": "amount",
+        "value": "700",
+        "evidence": "700"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "boundary-status-1",
+    "mode": "scalar",
+    "message": "Invoice already sent to John €700.",
+    "changes": [
+      {
+        "field": "amount",
+        "value": "700",
+        "evidence": "700"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "boundary-status-2",
+    "mode": "scalar",
+    "message": "Invoice recently issued to John €700.",
+    "changes": [
+      {
+        "field": "amount",
+        "value": "700",
+        "evidence": "700"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "boundary-status-3",
+    "mode": "scalar",
+    "message": "Invoice successfully delivered to John €700.",
+    "changes": [
+      {
+        "field": "amount",
+        "value": "700",
+        "evidence": "700"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "boundary-status-4",
+    "mode": "scalar",
+    "message": "Invoice payment received from John €700.",
+    "changes": [
+      {
+        "field": "amount",
+        "value": "700",
+        "evidence": "700"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "boundary-status-5",
+    "mode": "scalar",
+    "message": "Invoice last month amount €700.",
+    "changes": [
+      {
+        "field": "amount",
+        "value": "700",
+        "evidence": "700"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "boundary-status-6",
+    "mode": "scalar",
+    "message": "Invoice issued to John amount €700.",
+    "changes": [
+      {
+        "field": "amount",
+        "value": "700",
+        "evidence": "700"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "boundary-status-7",
+    "mode": "scalar",
+    "message": "Invoice issued to John total €700.",
+    "changes": [
+      {
+        "field": "amount",
+        "value": "700",
+        "evidence": "700"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "boundary-rename-0",
+    "mode": "items",
+    "message": "Could we rename valves to taps?",
+    "changes": [],
+    "patches": [
+      {
+        "index": 0,
+        "description": "valves",
+        "evidence": "Could we rename valves to taps?",
+        "changes": [
+          {
+            "field": "description",
+            "value": "taps",
+            "evidence": "taps"
+          }
+        ]
+      }
+    ],
+    "positive": false
+  },
+  {
+    "label": "boundary-rename-1",
+    "mode": "items",
+    "message": "Maybe rename valves to taps.",
+    "changes": [],
+    "patches": [
+      {
+        "index": 0,
+        "description": "valves",
+        "evidence": "Maybe rename valves to taps.",
+        "changes": [
+          {
+            "field": "description",
+            "value": "taps",
+            "evidence": "taps"
+          }
+        ]
+      }
+    ],
+    "positive": false
+  },
+  {
+    "label": "boundary-rename-2",
+    "mode": "items",
+    "message": "If approved, rename valves to taps.",
+    "changes": [],
+    "patches": [
+      {
+        "index": 0,
+        "description": "valves",
+        "evidence": "If approved, rename valves to taps.",
+        "changes": [
+          {
+            "field": "description",
+            "value": "taps",
+            "evidence": "taps"
+          }
+        ]
+      }
+    ],
+    "positive": false
+  },
+  {
+    "label": "boundary-rename-3",
+    "mode": "items",
+    "message": "Do not rename valves to taps.",
+    "changes": [],
+    "patches": [
+      {
+        "index": 0,
+        "description": "valves",
+        "evidence": "Do not rename valves to taps.",
+        "changes": [
+          {
+            "field": "description",
+            "value": "taps",
+            "evidence": "taps"
+          }
+        ]
+      }
+    ],
+    "positive": false
+  },
+  {
+    "label": "boundary-rename-4",
+    "mode": "items",
+    "message": "Rename valves to taps or washers.",
+    "changes": [],
+    "patches": [
+      {
+        "index": 0,
+        "description": "valves",
+        "evidence": "Rename valves to taps or washers.",
+        "changes": [
+          {
+            "field": "description",
+            "value": "taps",
+            "evidence": "taps"
+          }
+        ]
+      }
+    ],
+    "positive": false
+  },
+  {
+    "label": "boundary-rename-5",
+    "mode": "items",
+    "message": "Rename valves to taps or washers.",
+    "changes": [],
+    "patches": [
+      {
+        "index": 0,
+        "description": "valves",
+        "evidence": "Rename valves to taps or washers.",
+        "changes": [
+          {
+            "field": "description",
+            "value": "taps or washers",
+            "evidence": "taps or washers"
+          }
+        ]
+      }
+    ],
+    "positive": false
+  },
+  {
+    "label": "boundary-rename-6",
+    "mode": "items",
+    "message": "The old invoice:\nRename valves to taps.",
+    "changes": [],
+    "patches": [
+      {
+        "index": 0,
+        "description": "valves",
+        "evidence": "The old invoice:\nRename valves to taps.",
+        "changes": [
+          {
+            "field": "description",
+            "value": "taps",
+            "evidence": "taps"
+          }
+        ]
+      }
+    ],
+    "positive": false
+  },
+  {
+    "label": "boundary-rename-7",
+    "mode": "items",
+    "message": "Which description applies?\nRename valves to taps.",
+    "changes": [],
+    "patches": [
+      {
+        "index": 0,
+        "description": "valves",
+        "evidence": "Which description applies?\nRename valves to taps.",
+        "changes": [
+          {
+            "field": "description",
+            "value": "taps",
+            "evidence": "taps"
+          }
+        ]
+      }
+    ],
+    "positive": false
+  },
+  {
+    "label": "boundary-rename-8",
+    "mode": "items",
+    "message": "Rename valves to taps. That is wrong.",
+    "changes": [],
+    "patches": [
+      {
+        "index": 0,
+        "description": "valves",
+        "evidence": "Rename valves to taps",
+        "changes": [
+          {
+            "field": "description",
+            "value": "taps",
+            "evidence": "taps"
+          }
+        ]
+      }
+    ],
+    "positive": false
+  },
+  {
+    "label": "boundary-rename-9",
+    "mode": "items",
+    "message": "Rename valves to taps. That is for the previous job.",
+    "changes": [],
+    "patches": [
+      {
+        "index": 0,
+        "description": "valves",
+        "evidence": "Rename valves to taps",
+        "changes": [
+          {
+            "field": "description",
+            "value": "taps",
+            "evidence": "taps"
+          }
+        ]
+      }
+    ],
+    "positive": false
+  },
+  {
+    "label": "boundary-rename-10",
+    "mode": "items",
+    "message": "Rename valves to taps. The old invoice is irrelevant, cancel this change.",
+    "changes": [],
+    "patches": [
+      {
+        "index": 0,
+        "description": "valves",
+        "evidence": "Rename valves to taps",
+        "changes": [
+          {
+            "field": "description",
+            "value": "taps",
+            "evidence": "taps"
+          }
+        ]
+      }
+    ],
+    "positive": false
+  },
+  {
+    "label": "boundary-rename-11",
+    "mode": "items",
+    "message": "Rename valves to taps. Rename valves to washers.",
+    "changes": [],
+    "patches": [
+      {
+        "index": 0,
+        "description": "valves",
+        "evidence": "Rename valves to taps",
+        "changes": [
+          {
+            "field": "description",
+            "value": "taps",
+            "evidence": "taps"
+          }
+        ]
+      }
+    ],
+    "positive": false
+  },
+  {
+    "label": "mixed-rename-question",
+    "mode": "items",
+    "message": "Set customer to Mary. Rename valves to taps?",
+    "changes": [
+      {
+        "field": "customer_name",
+        "value": "Mary",
+        "evidence": "Set customer to Mary"
+      }
+    ],
+    "patches": [
+      {
+        "index": 0,
+        "description": "valves",
+        "evidence": "Rename valves to taps?",
+        "changes": [
+          {
+            "field": "description",
+            "value": "taps",
+            "evidence": "taps"
+          }
+        ]
+      }
+    ],
+    "positive": false
+  },
+  {
+    "label": "full-evidence-repudiation",
+    "mode": "scalar",
+    "message": "Set amount €700. That is wrong.",
+    "changes": [
+      {
+        "field": "amount",
+        "value": "700",
+        "evidence": "Set amount €700. That is wrong."
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "positive-confirmation-amount",
+    "mode": "scalar",
+    "message": "Set amount €700. That is correct.",
+    "changes": [
+      {
+        "field": "amount",
+        "value": "700",
+        "evidence": "Set amount €700"
+      }
+    ],
+    "patches": [],
+    "positive": true
+  },
+  {
+    "label": "positive-history-amount",
+    "mode": "scalar",
+    "message": "Set amount €700. The old invoice amount was €450.",
+    "changes": [
+      {
+        "field": "amount",
+        "value": "700",
+        "evidence": "Set amount €700"
+      }
+    ],
+    "patches": [],
+    "positive": true
+  },
+  {
+    "label": "positive-confirmation-customer_name",
+    "mode": "scalar",
+    "message": "Set customer to Mary. That is correct.",
+    "changes": [
+      {
+        "field": "customer_name",
+        "value": "Mary",
+        "evidence": "Set customer to Mary"
+      }
+    ],
+    "patches": [],
+    "positive": true
+  },
+  {
+    "label": "positive-history-customer_name",
+    "mode": "scalar",
+    "message": "Set customer to Mary. The old invoice amount was €450.",
+    "changes": [
+      {
+        "field": "customer_name",
+        "value": "Mary",
+        "evidence": "Set customer to Mary"
+      }
+    ],
+    "patches": [],
+    "positive": true
+  },
+  {
+    "label": "positive-confirmation-work_description",
+    "mode": "scalar",
+    "message": "Set description to installation. That is correct.",
+    "changes": [
+      {
+        "field": "work_description",
+        "value": "installation",
+        "evidence": "Set description to installation"
+      }
+    ],
+    "patches": [],
+    "positive": true
+  },
+  {
+    "label": "positive-history-work_description",
+    "mode": "scalar",
+    "message": "Set description to installation. The old invoice amount was €450.",
+    "changes": [
+      {
+        "field": "work_description",
+        "value": "installation",
+        "evidence": "Set description to installation"
+      }
+    ],
+    "patches": [],
+    "positive": true
+  },
+  {
+    "label": "positive-confirmation-customer_details",
+    "mode": "scalar",
+    "message": "Set address to 2 Pine Road. That is correct.",
+    "changes": [
+      {
+        "field": "customer_details",
+        "value": "2 Pine Road",
+        "evidence": "Set address to 2 Pine Road"
+      }
+    ],
+    "patches": [],
+    "positive": true
+  },
+  {
+    "label": "positive-history-customer_details",
+    "mode": "scalar",
+    "message": "Set address to 2 Pine Road. The old invoice amount was €450.",
+    "changes": [
+      {
+        "field": "customer_details",
+        "value": "2 Pine Road",
+        "evidence": "Set address to 2 Pine Road"
+      }
+    ],
+    "patches": [],
+    "positive": true
+  },
+  {
+    "label": "positive-confirmation-vat_rate",
+    "mode": "vat",
+    "message": "VAT rate is 23%. That is correct.",
+    "changes": [
+      {
+        "field": "vat_rate",
+        "value": "23",
+        "evidence": "VAT rate is 23%"
+      }
+    ],
+    "patches": [],
+    "positive": true
+  },
+  {
+    "label": "positive-history-vat_rate",
+    "mode": "vat",
+    "message": "VAT rate is 23%. The old invoice amount was €450.",
+    "changes": [
+      {
+        "field": "vat_rate",
+        "value": "23",
+        "evidence": "VAT rate is 23%"
+      }
+    ],
+    "patches": [],
+    "positive": true
+  },
+  {
+    "label": "positive-confirmation-vat_basis",
+    "mode": "vat",
+    "message": "including VAT. That is correct.",
+    "changes": [
+      {
+        "field": "vat_basis",
+        "value": "inclusive",
+        "evidence": "including VAT"
+      }
+    ],
+    "patches": [],
+    "positive": true
+  },
+  {
+    "label": "positive-history-vat_basis",
+    "mode": "vat",
+    "message": "including VAT. The old invoice amount was €450.",
+    "changes": [
+      {
+        "field": "vat_basis",
+        "value": "inclusive",
+        "evidence": "including VAT"
+      }
+    ],
+    "patches": [],
+    "positive": true
+  },
+  {
+    "label": "positive-invoice-0",
+    "mode": "scalar",
+    "message": "Invoice John €700.",
+    "changes": [
+      {
+        "field": "amount",
+        "value": "700",
+        "evidence": "700"
+      }
+    ],
+    "patches": [],
+    "positive": true
+  },
+  {
+    "label": "positive-invoice-1",
+    "mode": "scalar",
+    "message": "Please invoice John €700 for repairs.",
+    "changes": [
+      {
+        "field": "amount",
+        "value": "700",
+        "evidence": "700"
+      }
+    ],
+    "patches": [],
+    "positive": true
+  },
+  {
+    "label": "positive-invoice-2",
+    "mode": "scalar",
+    "message": "Invoice John at No. 25 Main Street for €700.",
+    "changes": [
+      {
+        "field": "amount",
+        "value": "700",
+        "evidence": "700"
+      }
+    ],
+    "patches": [],
+    "positive": true
+  },
+  {
+    "label": "positive-rename-0",
+    "mode": "items",
+    "message": "Rename valves to taps.",
+    "changes": [],
+    "patches": [
+      {
+        "index": 0,
+        "description": "valves",
+        "evidence": "Rename valves to taps.",
+        "changes": [
+          {
+            "field": "description",
+            "value": "taps",
+            "evidence": "taps"
+          }
+        ]
+      }
+    ],
+    "positive": true
+  },
+  {
+    "label": "positive-rename-1",
+    "mode": "items",
+    "message": "Rename valves to brass valves.",
+    "changes": [],
+    "patches": [
+      {
+        "index": 0,
+        "description": "valves",
+        "evidence": "Rename valves to brass valves.",
+        "changes": [
+          {
+            "field": "description",
+            "value": "brass valves",
+            "evidence": "brass valves"
+          }
+        ]
+      }
+    ],
+    "positive": true
+  },
+  {
+    "label": "positive-rename-2",
+    "mode": "items",
+    "message": "Rename valves to taps; keep elbows unchanged.",
+    "changes": [],
+    "patches": [
+      {
+        "index": 0,
+        "description": "valves",
+        "evidence": "Rename valves to taps",
+        "changes": [
+          {
+            "field": "description",
+            "value": "taps",
+            "evidence": "taps"
+          }
+        ]
+      }
+    ],
+    "positive": true
+  },
+  {
+    "label": "positive-rename-3",
+    "mode": "items",
+    "message": "The old invoice was exempt. Rename valves to taps.",
+    "changes": [],
+    "patches": [
+      {
+        "index": 0,
+        "description": "valves",
+        "evidence": "Rename valves to taps.",
+        "changes": [
+          {
+            "field": "description",
+            "value": "taps",
+            "evidence": "taps"
+          }
+        ]
+      }
+    ],
+    "positive": true
+  },
+  {
+    "label": "positive-rename-4",
+    "mode": "items",
+    "message": "Change valves description to taps.",
+    "changes": [],
+    "patches": [
+      {
+        "index": 0,
+        "description": "valves",
+        "evidence": "Change valves description to taps.",
+        "changes": [
+          {
+            "field": "description",
+            "value": "taps",
+            "evidence": "taps"
+          }
+        ]
+      }
+    ],
+    "positive": true
+  },
+  {
+    "label": "positive-rename-5",
+    "mode": "items",
+    "message": "Set description of valves to taps.",
+    "changes": [],
+    "patches": [
+      {
+        "index": 0,
+        "description": "valves",
+        "evidence": "Set description of valves to taps.",
+        "changes": [
+          {
+            "field": "description",
+            "value": "taps",
+            "evidence": "taps"
+          }
+        ]
+      }
+    ],
+    "positive": true
+  },
+  {
+    "label": "positive-reported-historical-cancel",
+    "mode": "scalar",
+    "message": "Set amount €700. The old invoice says cancel this change.",
+    "changes": [
+      {
+        "field": "amount",
+        "value": "700",
+        "evidence": "Set amount €700"
+      }
+    ],
+    "patches": [],
+    "positive": true
+  },
+  {
+    "label": "positive-independent-history",
+    "mode": "scalar",
+    "message": "The previous invoice amount was €450. Set amount €700.",
+    "changes": [
+      {
+        "field": "amount",
+        "value": "700",
+        "evidence": "Set amount €700"
+      }
+    ],
+    "patches": [],
+    "positive": true
+  },
+  {
+    "label": "boundary-labour-history",
+    "mode": "scalar",
+    "message": "Set labour €500. The labour was for the previous job.",
+    "changes": [
+      {
+        "field": "labour",
+        "value": "500",
+        "evidence": "Set labour €500"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "boundary-materials-history",
+    "mode": "scalar",
+    "message": "Set materials €300. That materials amount is for the old invoice.",
+    "changes": [
+      {
+        "field": "materials",
+        "value": "300",
+        "evidence": "Set materials €300"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "boundary-materials-repudiation",
+    "mode": "scalar",
+    "message": "Set materials €300. Materials amount wrong.",
+    "changes": [
+      {
+        "field": "materials",
+        "value": "300",
+        "evidence": "Set materials €300"
+      }
+    ],
+    "patches": [],
+    "positive": false
+  },
+  {
+    "label": "positive-labour-scoped-history",
+    "mode": "scalar",
+    "message": "Set labour €500. The old invoice labour was €400.",
+    "changes": [
+      {
+        "field": "labour",
+        "value": "500",
+        "evidence": "Set labour €500"
+      }
+    ],
+    "patches": [],
+    "positive": true
+  },
+  {
+    "label": "positive-materials-scoped-history",
+    "mode": "scalar",
+    "message": "Set materials €300. The old invoice materials were €200.",
+    "changes": [
+      {
+        "field": "materials",
+        "value": "300",
+        "evidence": "Set materials €300"
+      }
+    ],
+    "patches": [],
+    "positive": true
+  },
+  {
+    "label": "boundary-named-item-repudiation",
+    "mode": "items",
+    "message": "Change valves unit price €30. Valves price is wrong.",
+    "changes": [],
+    "patches": [
+      {
+        "index": 0,
+        "description": "valves",
+        "evidence": "Change valves unit price €30",
+        "changes": [
+          {
+            "field": "unit_price",
+            "value": "30",
+            "evidence": "Change valves unit price €30"
+          }
+        ]
+      }
+    ],
+    "positive": false
+  },
+  {
+    "label": "boundary-named-item-shorthand",
+    "mode": "items",
+    "message": "Change valves unit price €30. Valves price wrong.",
+    "changes": [],
+    "patches": [
+      {
+        "index": 0,
+        "description": "valves",
+        "evidence": "Change valves unit price €30",
+        "changes": [
+          {
+            "field": "unit_price",
+            "value": "30",
+            "evidence": "Change valves unit price €30"
+          }
+        ]
+      }
+    ],
+    "positive": false
+  },
+  {
+    "label": "boundary-quantity-history",
+    "mode": "items",
+    "message": "Change valves quantity to 4. That quantity is for the old invoice.",
+    "changes": [],
+    "patches": [
+      {
+        "index": 0,
+        "description": "valves",
+        "evidence": "Change valves quantity to 4",
+        "changes": [
+          {
+            "field": "quantity",
+            "value": "4",
+            "evidence": "Change valves quantity to 4"
+          }
+        ]
+      }
+    ],
+    "positive": false
+  }
+]
