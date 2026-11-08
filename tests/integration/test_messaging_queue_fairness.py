@@ -2,9 +2,11 @@
 
 import re
 from concurrent.futures import ThreadPoolExecutor
+from itertools import count
 from statistics import median
 from threading import Barrier
 from time import perf_counter
+from urllib.parse import parse_qs, urlsplit
 from uuid import UUID
 
 import pytest
@@ -113,6 +115,95 @@ def advance_polling_cooldowns(database):
                 "AND claim_token IS NULL AND claim_until IS NOT NULL FOR UPDATE SKIP LOCKED)"
             )
         )
+
+
+def drain_snapshot(database, identifiers, provider):
+    """Content-free diagnostics for this disposable fixture's committed work."""
+    with database.admin.connect() as connection:
+        inputs = (
+            connection.execute(
+                text(
+                    "SELECT count(*) FILTER (WHERE processed_at IS NOT NULL) AS processed, "
+                    "count(*) FILTER (WHERE processing_error IS NOT NULL) AS processing_errors "
+                    "FROM messages WHERE id = ANY(:ids)"
+                ),
+                {"ids": identifiers},
+            )
+            .mappings()
+            .one()
+        )
+        outboxes = (
+            connection.execute(
+                text(
+                    "SELECT o.status, o.attempts, o.last_error, count(*) AS count "
+                    "FROM outbox o JOIN messages m ON m.id = o.message_id "
+                    "WHERE m.reply_to_id = ANY(:ids) "
+                    "GROUP BY o.status, o.attempts, o.last_error ORDER BY o.status, o.attempts"
+                ),
+                {"ids": identifiers},
+            )
+            .mappings()
+            .all()
+        )
+        jobs = (
+            connection.execute(
+                text(
+                    "SELECT count(*) AS ready_jobs, "
+                    "count(*) FILTER (WHERE claim_token IS NOT NULL) AS active_receipts, "
+                    "count(*) FILTER (WHERE due_at > statement_timestamp()) AS future_jobs, "
+                    "count(*) FILTER (WHERE claim_token IS NULL AND "
+                    "claim_until > statement_timestamp()) AS cooldown_jobs "
+                    "FROM message_jobs WHERE ready"
+                )
+            )
+            .mappings()
+            .one()
+        )
+    return {
+        **dict(inputs),
+        **dict(jobs),
+        "sent": sum(row["count"] for row in outboxes if row["status"] == "sent"),
+        "provider_calls": len(provider.calls),
+        "outboxes": [dict(row) for row in outboxes],
+    }
+
+
+def drain_committed_work(database, identifiers, provider, run_batches):
+    """Bound drain work by durable progress, independently of machine throughput.
+
+    A reply can need another real claim after its predecessor sends. A claim or
+    an abandoned receipt alone is not progress. Four consecutive joined rounds
+    with no completed input or send fail, even if the scheduler keeps claiming.
+    The finite input/send population also bounds the total number of rounds.
+    """
+    expected = len(identifiers)
+    started = perf_counter()
+    state = drain_snapshot(database, identifiers, provider)
+    previous = state["processed"] + state["sent"]
+    history = [state]
+    stalled = 0
+    for round_number in range(4 * (2 * expected - previous) + 1):
+        diagnostic = (
+            f"round={round_number}, elapsed={perf_counter() - started:.3f}s, {history[-4:]}"
+        )
+        assert state["provider_calls"] <= expected, diagnostic
+        if state["processed"] == state["sent"] == expected:
+            assert state["provider_calls"] == expected, diagnostic
+            assert state["ready_jobs"] == 0, diagnostic
+            print(f"Committed queue drain: {diagnostic}")
+            return history
+        assert stalled < 4, f"no committed progress in four polling rounds: {diagnostic}"
+        # Workers from the preceding round have joined. Only tokenless polling
+        # cooldowns advance; source retries, active leases and receipts do not.
+        advance_polling_cooldowns(database)
+        run_batches()
+        state = drain_snapshot(database, identifiers, provider)
+        progress = state["processed"] + state["sent"]
+        assert previous <= progress <= 2 * expected, state
+        stalled = stalled + 1 if progress == previous else 0
+        previous = progress
+        history.append(state)
+    pytest.fail(f"finite queue drain budget exhausted: {history[-4:]}")
 
 
 def finish(database, seed, deliveries, *, tenant):
@@ -296,19 +387,7 @@ def test_concurrent_workers_recover_expiry_and_bypass_locked_rows_without_duplic
             == 1
         )
     expire(database, locked_sources)
-    # This final phase checks eventual draining, not a fixed polling-turn bound.
-    # Fast CI workers can exhaust 12 rounds while ordered sends are deferred;
-    # retain the real scheduler, cooldowns and every completion/dedup assertion.
-    # The four locked-row fairness rounds above remain unchanged.
-    drain_deadline = perf_counter() + 30
-    while perf_counter() < drain_deadline:
-        # Source order can require another polling turn after a predecessor
-        # settles. Advance the test's cooldowns after both workers have joined;
-        # do not alter source retry times, receipts or external delivery state.
-        advance_polling_cooldowns(database)
-        parallel_batches()
-        if len(provider.calls) == 202:
-            break
+    drain_committed_work(database, a_ids + b_ids, provider, parallel_batches)
     queue.complete(lost_delivery)
     queue.abandon(lost_delivery)
     assert parallel_batches() == 0
@@ -341,6 +420,70 @@ def test_concurrent_workers_recover_expiry_and_bypass_locked_rows_without_duplic
     with database.runtime.begin() as connection:
         set_context(connection, seed, tenant="a", subject="owner-b")
         assert connection.scalar(text("SELECT count(*) FROM messages")) == 0
+
+
+@pytest.mark.parametrize("clock_step", [None, 31], ids=["real-clock", "slow-round-clock"])
+def test_drain_handles_reverse_source_order_without_a_throughput_deadline(
+    messaging_client, database, sources, provider, monkeypatch, clock_step
+):
+    identifiers = arrive(database, sources["a"], 16)
+    with database.admin.begin() as connection:
+        # Real queue order stays due/id ascending; durable reply order is its
+        # reverse. Each poll must defer successors until the last reply sends.
+        connection.execute(
+            text(
+                "WITH positions AS (SELECT id, row_number() OVER (ORDER BY id DESC) AS n "
+                "FROM messages WHERE id = ANY(:ids)) "
+                "UPDATE messages m SET received_at = statement_timestamp() + "
+                "p.n * interval '1 microsecond' FROM positions p WHERE m.id = p.id"
+            ),
+            {"ids": identifiers},
+        )
+    worker = MessagingWorker(
+        messaging_client.app.state.engine, messaging_client.app.state.settings, provider
+    )
+    assert worker.run_once() == 16
+    if clock_step is not None:
+        ticks = count(step=clock_step)
+        # Model process descheduling only in the test's diagnostic clock. The
+        # database, production clocks, leases and provider timeouts stay real.
+        monkeypatch.setattr(f"{__name__}.perf_counter", lambda: next(ticks))
+    history = drain_committed_work(database, identifiers, provider, worker.run_once)
+    assert [state["sent"] for state in history] == list(range(17))
+    replies = {message["id"]: message for message in rows(database, "messages")}
+    source_by_outbox = {
+        outbox["id"]: replies[outbox["message_id"]]["reply_to_id"]
+        for outbox in rows(database, "outbox")
+    }
+    sent_sources = [
+        source_by_outbox[UUID(parse_qs(urlsplit(call["callback_url"]).query)["attempt_id"][0])]
+        for call in provider.calls
+    ]
+    assert sent_sources == sorted(identifiers, reverse=True)
+    assert len(set(provider.accepted_sids)) == 16
+    assert {outbox["attempts"] for outbox in rows(database, "outbox")} == {1}
+
+
+def test_drain_rejects_claim_churn_without_committed_progress(
+    messaging_client, database, sources, provider
+):
+    identifiers = arrive(database, sources["a"], 2)
+    worker = MessagingWorker(
+        messaging_client.app.state.engine, messaging_client.app.state.settings, provider
+    )
+    assert worker.run_once() == 2
+    with database.admin.begin() as connection:
+        connection.execute(text("SELECT id FROM conversations FOR UPDATE")).all()
+        # Real claims and cooldowns keep cycling, but the held conversation
+        # lock prevents every send. The drain guard must not call that progress.
+        with pytest.raises(AssertionError, match="no committed progress in four polling rounds"):
+            drain_committed_work(database, identifiers, provider, worker.run_once)
+        state = drain_snapshot(database, identifiers, provider)
+        assert state["sent"] == state["provider_calls"] == state["active_receipts"] == 0
+        assert state["ready_jobs"] == state["cooldown_jobs"] == 2
+    drain_committed_work(database, identifiers, provider, worker.run_once)
+    assert len(set(provider.accepted_sids)) == 2
+    assert {outbox["attempts"] for outbox in rows(database, "outbox")} == {1}
 
 
 def test_ready_turn_index_bounds_discovery_and_claim_cost_with_a_large_history(
