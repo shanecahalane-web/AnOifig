@@ -966,6 +966,10 @@ def _scalar_number_evidence(
     text = clause.text
     start, end = token.start - clause.start, token.end - clause.start
     prefix, suffix = text[:start], text[end:]
+    # Invoice status/reference prose cannot gain authority through either a
+    # financial label or the unlabelled invoice-command fallback below.
+    if re.match(r"\s*(?:please\s+)?invoice\b", text, re.I) and not invoice_command_prefix(text):
+        return None
     # Financial labels do not change an explicitly different numeric role. In
     # particular a duration, quantity or reference remains data rather than a fee.
     if re.search(

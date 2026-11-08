@@ -17,6 +17,7 @@ from anoifig.tara.assertions import (
     MutationTarget,
     TextField,
     assertion_context,
+    item_description_evidence,
     text_evidence,
     validate_mutation_authority,
     validate_statement_coverage,
@@ -534,8 +535,10 @@ def _patch_line_items(notes: InvoiceNotes, proposal: ProposedNotes, message: str
                 raise ValueError("ungrounded or repeated line item change")
             seen.add(change.field)
             if change.field == "description":
-                if not _mentions(change.value, change.evidence):
-                    raise ValueError("ungrounded line item description")
+                if not item_description_evidence(
+                    item.description, change.value, change.evidence, message, within=context
+                ):
+                    raise ValueError("ungrounded or nonaffirmative line item description")
             elif change.field == "quantity" and not numeric_evidence(
                 change.value,
                 change.evidence,

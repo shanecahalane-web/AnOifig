@@ -418,6 +418,22 @@ _CANCEL = re.compile(
     re.I,
 )
 _PRESERVE = re.compile(r"\b(?:keep|leave|retain|preserve|unchanged|stays?)\b", re.I)
+_REFERENCE_FIELD = (
+    r"(?:amount|price|unit\s+price|quantity|qty|rate|vat(?:\s+(?:rate|basis|treatment))?|"
+    r"labou?r(?:\s+(?:amount|price|charge))?|materials?(?:\s+(?:amount|price|charge))?|"
+    r"customer(?:\s+(?:name|details))?|work(?:\s+description)?|contact(?:\s+details)?|"
+    r"name|address|description|instruction|change|update|information|details)"
+)
+_REFERENCE_PREDICATE = (
+    r"(?:(?:['’]s|\s+(?:is|are|was|were))\b|"
+    r"(?=\s+(?:incorrect|wrong|false|invalid|mistaken|inapplicable)\b))"
+)
+_BACK_REFERENCE = re.compile(
+    r"^(?:(?:actually|sorry)\s+)?"
+    rf"(?:it|(?:this|that|these|those)(?:\s+{_REFERENCE_FIELD})?|"
+    rf"(?:the\s+)?{_REFERENCE_FIELD}){_REFERENCE_PREDICATE}",
+    re.I,
+)
 
 
 def _text_labels(message: str) -> tuple[re.Match[str], ...]:
@@ -495,7 +511,20 @@ def mutation_constraints(
             context = assertion_context(
                 message, start + verb.start(), start + verb.end(), topic="text"
             )
-            if context.document_scope != DocumentScope.HISTORICAL:
+            # A direct cancellation in its own clause must not inherit an old
+            # document from a preceding comma/heading. An explicitly historical
+            # report within this clause still retains its own document scope.
+            direct_cancel = (
+                _CANCEL.match(clause, verb.start()) is not None
+                and re.fullmatch(
+                    r"(?:(?:please|actually|now|instead)\s*)*",
+                    _presented(clause[: verb.start()]),
+                    re.I,
+                )
+                is not None
+                and _document_scope(clause) != DocumentScope.HISTORICAL
+            )
+            if context.document_scope != DocumentScope.HISTORICAL or direct_cancel:
                 names = frozenset(
                     name.casefold()
                     for name in item_names
@@ -602,7 +631,7 @@ def _operational_words_supported(statement: str, item_names: tuple[str, ...]) ->
         r"charge|increase|reduce|rename|correct|replace|all|whole|entire|the|a|an|to|at|"
         r"is|are|it|its|thats|that|s|for|of|on|this|one|current|new|being|prepared|invoice|bill|job|amount|price|cost|"
         r"total|subtotal|grand|net|gross|final|due|balance|overall|both|deposit|in|or|labou?r|materials?|unit|"
-        r"quantity|qty|each|apiece|per|item|items|line|so|with|vat|rate|tax|including|"
+        r"quantity|qty|each|apiece|per|item|items|line|description|so|with|vat|rate|tax|including|"
         r"included|excluding|inclusive|exclusive|incl|inc|excl|ex|before|plus|no|not|"
         r"registered|exempt|zero|rated|percent|cent|euros?|eur|e|k|thanks|cheers|"
         r"repairs?|boiler|work|hours?|hrs?|installation|replacement|wrong|valve|pen|tray)\b|[\s0-9€%.,:=@&/'’()-]+",
@@ -634,14 +663,32 @@ def _captured_invoice_statement(statement: str, text_values: tuple[str, ...]) ->
 
 def invoice_command_prefix(text: str) -> bool:
     """An invoice imperative names a recipient, not a document reference."""
+    # Inspect the entire recipient slot, so adverbs before a reporting predicate
+    # cannot turn "recently issued to John" into a customer name. Work payloads
+    # after `for` and values after a number/currency keep their own roles.
+    recipient = re.split(r"€|[0-9]|\bfor\b", text, maxsplit=1, flags=re.I)[0]
+    # The supported explicit current-document reference is not a past/status
+    # report. Its following field facts still pass their normal role checks.
+    recipient = re.sub(r"^\s*invoice\s+being\s+prepared\b", "invoice", recipient, flags=re.I)
     return (
         re.match(
             r"^\s*(?:please\s+)?invoice\s+"
-            r"(?!(?:from|for|dated|of|on|in|at|reference|ref|number|code|count|quantity|duration)\b)",
+            r"(?!(?:from|for|dated|of|on|in|at|reference|ref|number|code|count|quantity|duration|"
+            r"is|was|were|has|have|had|been|issued|sent|paid|discussed|delivered|received|"
+            r"settled|cancelled|canceled|prepared|drafted|approved|recorded|reported|"
+            r"already|previously|last|previous|earlier|old|yesterday|status|copy|payment)\b)",
             text,
             re.I,
         )
         is not None
+        and re.search(
+            r"\b(?:was|were|has|have|had|been|issued|sent|paid|discussed|delivered|received|"
+            r"settled|cancelled|canceled|prepared|drafted|approved|recorded|reported|"
+            r"last|previous|earlier|old|yesterday)\b",
+            recipient,
+            re.I,
+        )
+        is None
     )
 
 
@@ -683,6 +730,30 @@ def validate_statement_coverage(
         statement = _presented(raw).strip(" ,:")
         if raw.rstrip().endswith(":") and re.fullmatch(r"[0-9]+", statement):
             raise ValueError("unresolved numeric heading")
+        reference = _BACK_REFERENCE.match(statement)
+        if reference is None:
+            for name in dict.fromkeys(item_names):
+                reference = re.match(
+                    r"^(?:the\s+)?"
+                    + re.escape(name)
+                    + rf"(?:\s+{_REFERENCE_FIELD})?{_REFERENCE_PREDICATE}",
+                    statement,
+                    re.I,
+                )
+                if reference is not None:
+                    break
+        if reference and (
+            _document_scope(statement[reference.end() :]) == DocumentScope.HISTORICAL
+            or re.match(
+                r"\s*(?:(?:definitely|clearly|actually)\s+)?"
+                r"(?:incorrect|wrong|false|invalid|mistaken|inapplicable)\b",
+                statement[reference.end() :],
+                re.I,
+            )
+        ):
+            # This qualifies an earlier assertion, rather than introducing an
+            # independent old-document fact or another literal text value.
+            raise ValueError("unresolved qualification of prior instruction")
         if any(statement.casefold() == value.casefold() for value in text_values):
             continue
         if _contact_data_fragment(statement, text_values):
@@ -989,6 +1060,39 @@ def _text_role_matches(
             )
         )
     return False
+
+
+def item_description_evidence(
+    description: str, value: str, evidence: str, message: str, *, within: str
+) -> bool:
+    """Bind a rename to a complete command and its original assertion context."""
+    if re.search(r"\bor\b|\bversus\b|\bvs\.?\b", value, re.I):
+        return False
+    selector = re.escape(description)
+    command = re.fullmatch(
+        r"\s*(?:(?:please|actually|now|instead)\s+)*"
+        rf"(?:rename\s+(?:the\s+)?{selector}|"
+        rf"(?:change|set|update)\s+(?:the\s+)?"
+        rf"(?:description\s+of\s+{selector}|{selector}\s+description))"
+        r"\s+to\s+(?P<value>" + re.escape(value) + r")\s*",
+        within,
+        re.I,
+    )
+    if command is None:
+        return False
+    candidates = []
+    for source in re.finditer(re.escape(within), message):
+        start, end = (source.start() + offset for offset in command.span("value"))
+        context = assertion_context(message, start, end, topic="text")
+        if (
+            context.intent == AssertionIntent.AFFIRMATIVE
+            and context.document_scope == DocumentScope.CURRENT
+        ):
+            candidates.append((start, end))
+    spans = [match.span() for match in re.finditer(re.escape(evidence), message)]
+    return bool(spans) and all(
+        any(left <= start and end <= right for start, end in candidates) for left, right in spans
+    )
 
 
 def text_evidence(
