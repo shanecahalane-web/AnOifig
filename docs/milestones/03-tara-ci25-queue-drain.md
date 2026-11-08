@@ -1,16 +1,23 @@
-# PR #4: CI run 25 queue-drain investigation
+# PR #4: CI runs 25–26 queue-drain investigation
 
 Investigated commit: `cce059dbc26e65b07e433f24adac71d5b19cc23f`.
 No merge, deployment or live provider call is part of this correction.
 
 ## Finding
 
-The test's 30-second drain cutoff is a throughput assumption, not the queue's
-correctness contract. A valid ordered-reply backlog can keep making durable
-progress and still fail that cutoff. The confirmed defect is in the test harness;
-the exercised worker, claim, retry and locking paths did not lose work, duplicate
-sends or remain permanently blocked. No production change is justified by this
-evidence.
+Two problems are confirmed: a timing-sensitive test drain and a production
+conversation-lock contention defect. A blocked successor acquired the conversation
+lock before checking its predecessor. A worker with the ready head then skipped
+that lock, although its holder could not send anything. Repeated interleavings
+can prevent committed progress while claims and polling cooldowns keep cycling.
+This is a liveness defect; these reproductions showed no lost work, duplicate
+sends or cross-tenant access.
+
+The test's 30-second cutoff also imposed an unsupported throughput requirement.
+Replacing it with committed-progress bounds exposed the production defect in
+CI #26. The earlier harness-only assessment at
+`90fd3a51d0b31ab2103bc6ad1d799bc2b19275cd` was incomplete and is superseded
+by this report. The four-round no-progress guard remains unchanged.
 
 [Run 25, attempt 1](https://github.com/shanecahalane-web/AnOifig/actions/runs/42466962810/attempts/1)
 failed at `test_messaging_queue_fairness.py:317`: 202 replies existed but only 135
@@ -26,6 +33,23 @@ thread interleaving cannot be reconstructed. The deterministic reproduction belo
 demonstrates the same failed completion criterion with live, progressing work;
 it is not presented as a replay of the unavailable CI interleaving.
 
+[CI #26](https://github.com/shanecahalane-web/AnOifig/actions/runs/42493308654)
+at the harness-only correction failed: **3,040 passed / 1 failed in 493.36s**.
+The new guard stopped at round 15, elapsed 27.297s, after four consecutive rounds
+with 202 inputs processed, 110 sends and 92 pending/ready outbound jobs. Active
+receipts, future jobs and processing errors were all zero; sent attempts were 1,
+pending attempts 0. Polling cooldown counts were 59, 57, 55 and 60 in the last
+four snapshots. The initial four locked-row fairness rounds passed. Lint, format
+and Mypy passed; the two audit steps were skipped. The harness-only local full
+suite was then interrupted after 969 passes at 921.40s, not a completed result.
+
+A controlled two-worker regression pauses a successor at its real predecessor
+check after a real PostgreSQL claim, then lets another worker claim the ready
+head. Before the production fix, the successor holds the conversation lock:
+head progress is **[0, 0, 0, 0]**, failing in 5.21s. With the correction, progress
+is **[1, 1, 1, 1]**, passing in 4.36s with 8 unique sends and one attempt each.
+Events control scheduling without replacing database locks or claim results.
+
 ## Scheduling, locking and retry analysis
 
 - `migrations/versions/0004_messaging_queue_fairness.py` claims eligible jobs by
@@ -38,6 +62,11 @@ it is not presented as a replay of the unavailable CI interleaving.
 - Source and conversation locks prevent concurrent processing/dispatch. Provider
   I/O remains outside the database transaction; dispatch intent and successful
   reconciliation remain durable. No exception was swallowed by the observer.
+- Previously a successor took the conversation lock before discovering its
+  unresolved predecessor, excluding the head's `SKIP LOCKED` preparation.
+  Claim fairness alone cannot prevent this source-lock contention. The new
+  read-only rejection happens before that lock; send authorization still happens
+  under lock and immediately before provider I/O.
 - Deferred work releases its opaque receipt with a one-second polling cooldown.
   This is not a provider retry and does not increment send attempts. Business
   retry times, dispatch leases and uncertain-send rules are separate.
@@ -90,10 +119,25 @@ Observation overhead is included; these are not production performance claims.
 
 ## Exact correction
 
-Only [`tests/integration/test_messaging_queue_fairness.py`](../../tests/integration/test_messaging_queue_fairness.py),
+[`src/anoifig/messaging/worker.py`](../../src/anoifig/messaging/worker.py),
+[`tests/integration/test_messaging_queue_fairness.py`](../../tests/integration/test_messaging_queue_fairness.py),
 [`tests/integration/test_messaging.py`](../../tests/integration/test_messaging.py)
-and this report change. Production source, migrations, dependencies, queue
-priorities, retry delays, leases and provider deadlines are unchanged.
+and this report change. Migrations, dependencies, queue priorities, retry delays,
+leases, provider deadlines and CI timeout are unchanged.
+
+The worker performs a tenant-authorized, read-only predecessor check before
+taking the conversation lock for otherwise eligible pending/retry work. This
+can only defer a send; the original locked check and pre-I/O check remain
+authoritative. Expired-window, exhausted-retry and dispatch-recovery rows bypass
+the early rejection and retain their normal terminal/recovery handling. The
+locked message read and each source-position read refresh existing ORM objects,
+preventing stale advisory-read state from reaching the authoritative check.
+
+Six new production regression cases cover the controlled successor/head
+interleaving; expired dispatch, expired window and exhausted retry behind an
+unresolved predecessor; and new predecessors or changed source positions between
+the advisory and locked checks. The latter cases must defer with zero send
+attempts and no provider call.
 
 The final drain now measures **committed processed inputs plus sent outboxes**.
 Claims, released receipts and worker return values cannot count as progress.
@@ -136,13 +180,20 @@ number of post-concurrency drain polls decreases rather than being extended.
 
 ## Correction validation
 
+The first four rows below document the intermediate harness-only correction;
+they did not eliminate the production contention exposed by CI #26. The final
+production correction has additional focused, affected and stress evidence.
+
 | Check | Result |
 | --- | --- |
 | Three new drain guards | 3 passed, 5 deselected, 34.27s |
 | Repeated concurrent-message/callback test after removing redundant preliminary drain | Five passes; each completed all 16 sends with no ready jobs and one attempt per outbox; observed test-body times 5.873–6.564s |
 | Same large deterministic reproduction after correction | Passed: all 202 sends, no ready jobs, one attempt per outbox and no worker warnings; drain 235.717s |
 | Affected messaging integration tests after both scoped harness corrections | **75 passed in 99.47s**; includes claims, retries, concurrent workers, callbacks, fairness and the three new guards |
-| Full unfiltered suite | 3,041 tests collected; the final exact-commit outcome is recorded in [PR #4](https://github.com/shanecahalane-web/AnOifig/pull/4) |
+| Six production regression cases | **6 passed in 8.93s** |
+| Affected integration modules after production correction, including dispatch/process recovery | **96 passed in 174.16s** |
+| Two repeated large constrained reproductions after production correction | Both passed: 202 sends, zero ready jobs, one attempt each, no processing errors or worker warnings; drain 223.633s / 202.520s; zero conversation-lock deferrals in both |
+| Full unfiltered suite and final GitHub Actions | Exact-commit outcomes recorded together in [PR #4](https://github.com/shanecahalane-web/AnOifig/pull/4) |
 | Ruff lint and formatting | Passed |
 | Strict Mypy | Passed, 40 source files |
 | Bandit | Passed |

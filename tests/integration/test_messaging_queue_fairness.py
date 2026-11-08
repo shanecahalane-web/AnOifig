@@ -4,7 +4,7 @@ import re
 from concurrent.futures import ThreadPoolExecutor
 from itertools import count
 from statistics import median
-from threading import Barrier
+from threading import Barrier, Event
 from time import perf_counter
 from urllib.parse import parse_qs, urlsplit
 from uuid import UUID
@@ -484,6 +484,180 @@ def test_drain_rejects_claim_churn_without_committed_progress(
     drain_committed_work(database, identifiers, provider, worker.run_once)
     assert len(set(provider.accepted_sids)) == 2
     assert {outbox["attempts"] for outbox in rows(database, "outbox")} == {1}
+
+
+def test_blocked_successor_cannot_take_conversation_lock_from_ready_head(
+    messaging_client, database, sources, provider, monkeypatch
+):
+    class OneJobQueue(PostgresWorkQueue):
+        def receive(self, limit=100):
+            return super().receive(1)
+
+    settings = messaging_client.app.state.settings
+    engine = messaging_client.app.state.engine
+    normal = MessagingWorker(engine, settings, provider)
+    competitor = MessagingWorker(engine, settings, provider, queue=OneJobQueue(engine, settings))
+    head_worker = MessagingWorker(engine, settings, provider, queue=OneJobQueue(engine, settings))
+    original = MessagingWorker._has_unresolved_predecessor
+    identifiers = []
+    head_progress = []
+    for _ in range(4):
+        pair = sorted(arrive(database, sources["a"], 2))
+        identifiers.extend(pair)
+        assert normal.run_once() == 2
+        replies = rows(database, "messages", "WHERE reply_to_id = ANY(:ids)", {"ids": pair})
+        successor = next(message for message in replies if message["reply_to_id"] == pair[1])
+        with database.admin.begin() as connection:
+            # A retry/claim turn can put a successor ahead of its source-order
+            # predecessor. Use the real source trigger and claim SQL for this.
+            connection.execute(
+                text(
+                    "UPDATE outbox SET available_at = statement_timestamp() - interval '1 hour' "
+                    "WHERE message_id = :id"
+                ),
+                {"id": successor["id"]},
+            )
+        checked = Event()
+        release = Event()
+
+        def pause_blocked_successor(
+            session,
+            message,
+            *,
+            successor_id=successor["id"],
+            checked_event=checked,
+            release_event=release,
+        ):
+            blocked = original(session, message)
+            if message.id == successor_id and blocked:
+                checked_event.set()
+                assert release_event.wait(timeout=10)
+            return blocked
+
+        monkeypatch.setattr(
+            MessagingWorker, "_has_unresolved_predecessor", staticmethod(pause_blocked_successor)
+        )
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            later = executor.submit(competitor.run_once)
+            try:
+                assert checked.wait(timeout=10)
+                # Descheduling a blocked successor at its actual predecessor
+                # check must not prevent the eligible head from dispatching.
+                head_progress.append(head_worker.run_once())
+            finally:
+                release.set()
+            assert later.result(timeout=10) == 0
+        drain_committed_work(database, identifiers, provider, normal.run_once)
+    assert head_progress == [1] * 4, (
+        f"head progress while a blocked successor checks: {head_progress}"
+    )
+    assert len(provider.calls) == len(set(provider.accepted_sids)) == 8
+    assert {outbox["attempts"] for outbox in rows(database, "outbox")} == {1}
+
+
+@pytest.mark.parametrize(
+    ("case", "expected_status", "expected_error"),
+    [
+        ("expired_dispatch", "uncertain", "dispatch_interrupted"),
+        ("expired_window", "blocked", "template_required"),
+        ("exhausted_retry", "failed", "retry_exhausted"),
+    ],
+)
+def test_predecessor_preflight_preserves_terminal_and_recovery_paths(
+    messaging_client, database, sources, provider, case, expected_status, expected_error
+):
+    pair = sorted(arrive(database, sources["a"], 2))
+    worker = MessagingWorker(
+        messaging_client.app.state.engine, messaging_client.app.state.settings, provider
+    )
+    assert worker.run_once() == 2
+    replies = rows(database, "messages", "WHERE reply_to_id = ANY(:ids)", {"ids": pair})
+    head = next(message for message in replies if message["reply_to_id"] == pair[0])
+    later = next(message for message in replies if message["reply_to_id"] == pair[1])
+    with database.admin.begin() as connection:
+        connection.execute(
+            text("UPDATE outbox SET status = 'uncertain' WHERE message_id = :id"),
+            {"id": head["id"]},
+        )
+        if case == "expired_dispatch":
+            connection.execute(
+                text(
+                    "UPDATE outbox SET status = 'dispatching', attempts = 1, "
+                    "lease_until = statement_timestamp() - interval '1 second' "
+                    "WHERE message_id = :id"
+                ),
+                {"id": later["id"]},
+            )
+        elif case == "expired_window":
+            connection.execute(
+                text("UPDATE conversations SET last_inbound_at = now() - interval '25 hours'")
+            )
+        else:
+            connection.execute(
+                text("UPDATE outbox SET status = 'retry', attempts = 5 WHERE message_id = :id"),
+                {"id": later["id"]},
+            )
+    [outbox] = rows(database, "outbox", "WHERE message_id = :id", {"id": later["id"]})
+    assert worker.process_delivery(outbox["id"])
+    [after] = rows(database, "outbox", "WHERE id = :id", {"id": outbox["id"]})
+    assert after["status"] == expected_status
+    assert after["last_error"] == expected_error
+    assert after["attempts"] == outbox["attempts"]
+    assert provider.calls == []
+
+
+@pytest.mark.parametrize("change", ["new_predecessor", "changed_source_position"])
+def test_preflight_cannot_authorize_a_send_when_source_order_changes_before_locking(
+    messaging_client, database, sources, provider, monkeypatch, change
+):
+    pair = sorted(arrive(database, sources["a"], 2))
+    worker = MessagingWorker(
+        messaging_client.app.state.engine, messaging_client.app.state.settings, provider
+    )
+    if change == "new_predecessor":
+        assert worker.process_delivery(pair[1])
+    else:
+        assert worker.run_once() == 2
+        with database.admin.begin() as connection:
+            connection.execute(
+                text("UPDATE messages SET received_at = now() - interval '1 hour' WHERE id = :id"),
+                {"id": pair[1]},
+            )
+    [later] = rows(database, "messages", "WHERE reply_to_id = :id", {"id": pair[1]})
+    [outbox] = rows(database, "outbox", "WHERE message_id = :id", {"id": later["id"]})
+    original = worker._has_unresolved_predecessor
+    changed = False
+
+    def change_after_preflight(session, message):
+        nonlocal changed
+        blocked = original(session, message)
+        if message.id == later["id"] and not changed:
+            assert not blocked
+            changed = True
+            if change == "new_predecessor":
+                # Another processing transaction commits the earlier reply after this
+                # advisory read, before the contender takes the conversation lock.
+                assert worker.process_delivery(pair[0])
+            else:
+                # A retained-record repair must not leave the locked check using
+                # the source object cached by the earlier advisory read.
+                with database.admin.begin() as connection:
+                    connection.execute(
+                        text(
+                            "UPDATE messages SET received_at = now() + interval '1 hour' "
+                            "WHERE id = :id"
+                        ),
+                        {"id": pair[1]},
+                    )
+        return blocked
+
+    monkeypatch.setattr(worker, "_has_unresolved_predecessor", change_after_preflight)
+    assert not worker.process_delivery(outbox["id"])
+    assert changed
+    [after] = rows(database, "outbox", "WHERE id = :id", {"id": outbox["id"]})
+    assert after["status"] == "pending"
+    assert after["attempts"] == 0
+    assert provider.calls == []
 
 
 def test_ready_turn_index_bounds_discovery_and_claim_cost_with_a_large_history(

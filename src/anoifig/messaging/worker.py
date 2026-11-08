@@ -253,6 +253,33 @@ class MessagingWorker:
 
     def _prepare_outbound(self, session: Session, job: Job) -> tuple[SendCommand | None, bool]:
         _, link = authorise_route(session, job.route)
+        # A successor that cannot send must not take the conversation lock away
+        # from its ready predecessor. This read-only rejection is advisory:
+        # retain all locked checks below and the final pre-I/O recheck. Expired,
+        # exhausted and dispatching work still reaches its normal recovery path.
+        preflight_now = datetime.now(UTC)
+        pending = session.scalar(
+            select(Message)
+            .join(
+                Outbox,
+                (Outbox.message_id == Message.id) & (Outbox.tenant_id == Message.tenant_id),
+            )
+            .join(
+                Conversation,
+                (Conversation.id == Message.conversation_id)
+                & (Conversation.tenant_id == Message.tenant_id),
+            )
+            .where(
+                Outbox.id == job.entity_id,
+                Outbox.tenant_id == job.route.tenant_id,
+                Outbox.status.in_(("pending", "retry")),
+                Outbox.attempts < MAX_ATTEMPTS,
+                Outbox.available_at <= preflight_now,
+                Conversation.last_inbound_at > preflight_now - timedelta(hours=24),
+            )
+        )
+        if pending is not None and self._has_unresolved_predecessor(session, pending):
+            return None, False
         # One conversation lock serialises dispatch preparation across every
         # outbox in the conversation. Provider I/O is still outside transactions.
         conversation = self._lock_outbound_conversation(session, job, skip_locked=True)
@@ -275,6 +302,7 @@ class MessagingWorker:
                 Message.tenant_id == outbox.tenant_id,
             )
             .with_for_update()
+            .execution_options(populate_existing=True)
         )
         if message is None:
             raise AccessDenied
@@ -356,7 +384,11 @@ class MessagingWorker:
         position. Processing/creation time and optional state-version metadata
         cannot change the order of replies to accepted inbound messages.
         """
-        source = session.get(Message, message.reply_to_id) if message.reply_to_id else None
+        source = (
+            session.get(Message, message.reply_to_id, populate_existing=True)
+            if message.reply_to_id
+            else None
+        )
         position = (source.received_at, source.id) if source else (message.received_at, message.id)
         prior_reply, prior_source = aliased(Message), aliased(Message)
         earlier = session.scalar(
