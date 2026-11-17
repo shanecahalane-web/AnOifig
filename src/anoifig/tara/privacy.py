@@ -1,6 +1,25 @@
-"""Best-effort contact minimisation, not a general personal-information detector."""
+"""Confirmation sensitivity and best-effort model context minimisation."""
 
 import re
+
+CONFIRMATION = re.compile(r"(APPLY|REJECT) ([0-9A-F]{32})")
+OMITTED_CONFIRMATION = "[confirmation omitted]"
+# A complete challenge is sensitive even when adjacent to other characters.
+_CHALLENGE = re.compile(r"[0-9a-f]{32,}", re.IGNORECASE)
+_COMMAND_SHAPE = re.compile(r"(?:APPLY|REJECT)\b(?:[\s:=_-]+\S+)?", re.IGNORECASE)
+_CODE_ARGUMENT = re.compile(r"\b(?:APPLY|REJECT)\b[\s:=_-]+[a-z0-9_-]{24,}", re.IGNORECASE)
+
+
+def is_confirmation_shaped(body: str) -> bool:
+    # Reserve a bare verb or single-argument command even if the code is invalid.
+    # Ordinary instructions such as "Apply VAT 23%" still reach Tara.
+    return (
+        body == OMITTED_CONFIRMATION
+        or _CHALLENGE.search(body) is not None
+        or _COMMAND_SHAPE.fullmatch(body.strip().strip("\"'“”‘’`").strip()) is not None
+        or _CODE_ARGUMENT.search(body) is not None
+    )
+
 
 # Irish geographic numbering areas have different subscriber lengths. Matching
 # those lengths avoids treating arbitrary totals, dates and short references as
@@ -92,6 +111,7 @@ CONTACT_PATTERNS = (
 
 
 def minimise(text: str, *, contact_details: str | None = None) -> str:
+    text = _CHALLENGE.sub(OMITTED_CONFIRMATION, text)
     if contact_details:
         text = text.replace(contact_details, "[contact details omitted]")
     for pattern in CONTACT_PATTERNS:

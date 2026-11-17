@@ -20,7 +20,12 @@ from anoifig.db.session import check_runtime_database
 from anoifig.db.tara_models import TaraPendingProposal, TaraRun, TaraState, TaraUsage
 from anoifig.identity.service import AccessDenied
 from anoifig.messaging.service import Job, authorise_route, reply_to_inbound
-from anoifig.tara.privacy import minimise
+from anoifig.tara.privacy import (
+    CONFIRMATION,
+    OMITTED_CONFIRMATION,
+    is_confirmation_shaped,
+    minimise,
+)
 from anoifig.tara.prompt import INSTRUCTIONS, PROMPT_VERSION
 from anoifig.tara.provider import AIProvider, AIRequest, AIResult
 from anoifig.tara.schemas import (
@@ -52,8 +57,6 @@ CAPABILITIES = (
     "PDFs, quotations, payments, expenses and reminders aren't available yet."
 )
 FORGET_COMMANDS = {"forget my notes", "clear my notes", "start a new invoice", "start over"}
-CONFIRMATION = re.compile(r"(APPLY|REJECT) ([0-9A-F]{32})")
-CHALLENGE_MENTION = re.compile(r"\b[0-9A-F]{32}\b", re.I)
 
 
 def proposal_preview(before: dict[str, object], after: dict[str, object], challenge: str) -> str:
@@ -92,11 +95,11 @@ class TaraService:
     def __init__(self, engine: Engine, settings: Settings, provider: AIProvider) -> None:
         self.engine, self.settings, self.provider = engine, settings, provider
 
-    def _authorise(self, session: Session, job: Job) -> None:
+    def _authorise(self, session: Session, job: Job, *, lock_link: bool = False) -> None:
         check_runtime_database(
             session.connection(), require_tls=self.settings.environment == "production"
         )
-        authorise_route(session, job.route)
+        authorise_route(session, job.route, lock_link=lock_link)
 
     def process(self, job: Job) -> bool:
         prepared = self._prepare(job)
@@ -177,10 +180,11 @@ class TaraService:
             if state.user_id != message.user_id:
                 raise AccessDenied
             confirmation = CONFIRMATION.fullmatch(message.body)
+            sensitive = is_confirmation_shaped(message.body)
             memory_expired = min(state.updated_at, state.memory_since) < now - timedelta(
                 days=self.settings.tara_memory_days
             )
-            if memory_expired and confirmation is None:
+            if memory_expired and not sensitive:
                 self._clear_memory(session, state, message)
             if run is not None:
                 self._finish(session, message, state, run, FALLBACK, "processing_interrupted")
@@ -206,7 +210,7 @@ class TaraService:
                 expected_version=state.version,
             )
             session.add(run)
-            if CHALLENGE_MENTION.search(message.body):
+            if sensitive:
                 run.action = "proposal_unavailable"
                 self._finish(
                     session,
@@ -309,13 +313,13 @@ class TaraService:
         )
         body = "That proposal is no longer available. Please send the changes again."
         action = "proposal_unavailable"
-        if proposal is not None and proposal.expires_at <= now:
-            proposal.status = "expired"
-        elif proposal is not None and (
-            memory_expired or proposal.expected_version != state.version
+        preview = None
+        if (
+            proposal is not None
+            and proposal.expires_at > now
+            and not memory_expired
+            and proposal.expected_version == state.version
         ):
-            proposal.status = "superseded"
-        elif proposal is not None:
             # The preview is the unique reply/outbox of the originating turn.
             preview = session.execute(
                 select(Message, Outbox)
@@ -329,34 +333,36 @@ class TaraService:
                 )
                 .with_for_update(of=Outbox)
             ).one_or_none()
+            if preview is not None:
+                session.refresh(preview[0], with_for_update=True)
+        # Lock the link after the conversation and any preview locks. Unlink
+        # only locks the link, so it cannot wait on these rows while holding it.
+        session.expire_all()
+        self._authorise(session, job, lock_link=True)
+        checked_at = datetime.now(UTC)
+        if proposal is not None and proposal.expires_at <= checked_at:
+            proposal.status = "expired"
+        elif proposal is not None and (
+            memory_expired
+            or proposal.expected_version != state.version
+            or min(state.updated_at, state.memory_since)
+            < checked_at - timedelta(days=self.settings.tara_memory_days)
+        ):
+            proposal.status = "superseded"
+        elif proposal is not None:
             if preview is None:
                 raise ValueError("missing proposal preview")
             preview_message, outbox = preview
-            session.refresh(preview_message, with_for_update=True)
-            # The outbox lock can wait behind callback reconciliation. Refresh
-            # identity/role and clock after waiting, before authorising a write.
-            session.flush()
-            session.expire_all()
-            self._authorise(session, job)
             source = session.get(Message, proposal.source_message_id)
-            if proposal.expires_at <= datetime.now(UTC):
-                proposal.status = "expired"
-            elif (
-                proposal.expected_version != state.version
-                or min(state.updated_at, state.memory_since)
-                < datetime.now(UTC) - timedelta(days=self.settings.tara_memory_days)
-                or (
-                    source is None
-                    or (message.received_at, message.id)
-                    <= (
-                        source.received_at,
-                        source.id,
-                    )
-                    or preview_message.body
-                    != proposal_preview(
-                        proposal.before_notes, proposal.after_notes, proposal.challenge
-                    )
+            if (
+                source is None
+                or (message.received_at, message.id)
+                <= (
+                    source.received_at,
+                    source.id,
                 )
+                or preview_message.body
+                != proposal_preview(proposal.before_notes, proposal.after_notes, proposal.challenge)
             ):
                 proposal.status = "superseded"
             elif outbox.status in {"pending", "retry", "dispatching", "uncertain"}:
@@ -436,6 +442,7 @@ class TaraService:
                 Message.conversation_id == message.conversation_id,
                 Message.direction == "inbound",
                 Message.processed_at.is_not(None),
+                Message.body != OMITTED_CONFIRMATION,
                 # Successful structured edits are already represented by the
                 # validated notes. Never replay their raw text, including old
                 # contact corrections recorded before contact-specific audit
@@ -486,6 +493,8 @@ class TaraService:
                 ),
             }
             for row, intent, _action in reversed(rows)
+            # Legacy and recovery records can lack an action tag.
+            if not is_confirmation_shaped(row.body)
         )
 
     @staticmethod
@@ -764,6 +773,10 @@ class TaraService:
     ) -> None:
         now = datetime.now(UTC)
         run.status, run.completed_at, run.error_code = "complete", now, error
+        if is_confirmation_shaped(message.body):
+            message.body = OMITTED_CONFIRMATION
+            if run.action is None:
+                run.action = "proposal_unavailable"
         # A stale run owns its fallback reply, not the newer state's pending
         # question or activity timestamp. Keep every newer state field intact.
         if error != "stale_state":

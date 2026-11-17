@@ -1,14 +1,23 @@
 """Application-owned proposal confirmation through signed ingress and real RLS."""
 
+import logging
 import re
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event
+from time import monotonic
 
 import pytest
 from sqlalchemy import text
-from test_messaging import rows
+from sqlalchemy.exc import SQLAlchemyError
+from test_messaging import link_path, rows
 from test_phase1_contract_regressions import established, state
 from test_tara import accept
 from test_tara import messaging_client as messaging_client
 from test_tara_review_corrections import change, proposal
+
+import anoifig.messaging.routes as messaging_routes
+import anoifig.tara.service as tara_service
+from anoifig.messaging.worker import MAX_ATTEMPTS
 
 pytestmark = pytest.mark.integration
 
@@ -169,8 +178,6 @@ def test_reset_supersedes_pending_proposal(messaging_client, database, seed, bea
 def test_two_concurrent_confirmation_turns_apply_only_once(
     messaging_client, database, seed, bearer
 ):
-    from concurrent.futures import ThreadPoolExecutor
-
     worker, ai = established(messaging_client, database, seed, bearer)
     before = state(database)
     _, _, outbox, token = propose(messaging_client, database, worker, ai)
@@ -217,7 +224,7 @@ def test_revocation_before_final_authorisation_prevents_confirmation(
     original = worker.tara._authorise
     calls = 0
 
-    def revoke_before_final_check(session, job):
+    def revoke_before_final_check(session, job, **kwargs):
         nonlocal calls
         calls += 1
         if calls == 2:
@@ -229,7 +236,7 @@ def test_revocation_before_final_authorisation_prevents_confirmation(
                     ),
                     {"tenant": seed.businesses["a"], "user": seed.users["owner-a"]},
                 )
-        return original(session, job)
+        return original(session, job, **kwargs)
 
     monkeypatch.setattr(worker.tara, "_authorise", revoke_before_final_check)
     assert worker.process_delivery(identifier)
@@ -240,11 +247,21 @@ def test_revocation_before_final_authorisation_prevents_confirmation(
     assert job["last_error"] == "access_revoked"
 
 
-def test_confirmation_challenge_is_not_replayed_to_model(messaging_client, database, seed, bearer):
+@pytest.mark.parametrize("verb", ["APPLY", "REJECT"])
+def test_confirmation_challenge_is_not_replayed_to_model(
+    verb, messaging_client, database, seed, bearer
+):
     worker, ai = established(messaging_client, database, seed, bearer)
     _, _, outbox, token = propose(messaging_client, database, worker, ai)
     accept_preview(database, outbox)
-    assert worker.process_delivery(accept(messaging_client, f"APPLY {token}"))
+    requests = len(ai.requests)
+    identifier = accept(messaging_client, f"{verb} {token}")
+    assert worker.process_delivery(identifier)
+    assert len(ai.requests) == requests
+    [record] = rows(database, "tara_pending_proposals")
+    assert record["status"] == ("confirmed" if verb == "APPLY" else "rejected")
+    [inbound] = rows(database, "messages", "WHERE id = :id", {"id": identifier})
+    assert token not in inbound["body"]
     assert worker.process_delivery(accept(messaging_client, "Hello again"))
     assert token not in ai.requests[-1].payload()
     assert "Set amount" not in str(ai.requests[-1].history)
@@ -283,21 +300,220 @@ def test_signed_callback_reconciles_uncertain_preview_before_confirmation(
     assert worker.provider.calls == []
 
 
-@pytest.mark.parametrize("template", ["APPLY {} please", "apply {}", '"APPLY {}"', "{}"])
+@pytest.mark.parametrize(
+    "template",
+    [
+        "APPLY {}x",
+        "REJECT x{}",
+        "please APPLY x{}x",
+        "APPLY_{}",
+        "x{}x",
+        "APPLY A{}F",
+        "APPLY {} please",
+        "apply {}",
+        '"APPLY {}"',
+        "{}",
+        "APPLY",
+        "REJECT bad-code",
+        "Please REJECT Z8B1234567890QZ1234567890Z12345 again",
+    ],
+)
 def test_malformed_confirmation_never_reaches_model_or_changes_notes(
-    template, messaging_client, database, seed, bearer
+    template, messaging_client, database, seed, bearer, caplog
 ):
+    caplog.set_level(logging.INFO)
     worker, ai = established(messaging_client, database, seed, bearer)
     before = state(database)
     _, _, outbox, token = propose(messaging_client, database, worker, ai)
     accept_preview(database, outbox)
     calls = len(ai.requests)
-    assert worker.process_delivery(accept(messaging_client, template.format(token)))
+    command = template.format(token)
+    identifier = accept(messaging_client, command)
+    [inbound] = rows(database, "messages", "WHERE id = :id", {"id": identifier})
+    assert inbound["body"] != command
+    assert worker.process_delivery(identifier)
     assert len(ai.requests) == calls
     assert state(database)["notes"] == before["notes"]
     assert state(database)["version"] == before["version"]
+    [reply] = rows(database, "messages", "WHERE reply_to_id = :id", {"id": identifier})
+    assert reply["body"] == "Please send the exact APPLY or REJECT command from the preview."
     assert worker.process_delivery(accept(messaging_client, "Hello again"))
     assert token not in ai.requests[-1].payload()
+    assert token not in caplog.text
+
+
+def test_legacy_confirmation_without_action_is_not_replayed(
+    messaging_client, database, seed, bearer
+):
+    worker, ai = established(messaging_client, database, seed, bearer)
+    _, _, _, token = propose(messaging_client, database, worker, ai)
+    # Simulate a historical processed record with the old raw body and no tag.
+    identifier = accept(messaging_client, f"APPLY {token}x")
+    assert worker.process_delivery(identifier)
+    with database.admin.begin() as connection:
+        connection.execute(
+            text("UPDATE messages SET body = :body WHERE id = :id"),
+            {"id": identifier, "body": f"APPLY {token}x"},
+        )
+        connection.execute(
+            text("UPDATE tara_runs SET action = NULL WHERE message_id = :id"), {"id": identifier}
+        )
+        connection.execute(
+            text(
+                "UPDATE tara_states SET notes = "
+                "jsonb_set(notes, '{work_description}', to_jsonb(CAST(:body AS text)))"
+            ),
+            {"body": f"Legacy work reference x{token}x"},
+        )
+
+    assert worker.process_delivery(accept(messaging_client, "Apply VAT 23%"))
+    request = ai.requests[-1]
+    assert request.message == "Apply VAT 23%"
+    assert request.history == ({"role": "inbound", "text": "Hello"},)
+    assert token not in request.payload()
+
+
+def test_confirmation_terminal_fallback_does_not_replay_challenge(
+    messaging_client, database, seed, bearer, monkeypatch, caplog
+):
+    caplog.set_level(logging.INFO)
+    worker, ai = established(messaging_client, database, seed, bearer)
+    before = state(database)
+    _, _, outbox, token = propose(messaging_client, database, worker, ai)
+    accept_preview(database, outbox)
+    identifier = accept(messaging_client, f"APPLY {token}")
+    requests = len(ai.requests)
+    failed = 0
+    reply_to_inbound = tara_service.reply_to_inbound
+
+    def fail_confirmation_reply(session, message, body, *, error_code, conversation_version):
+        nonlocal failed
+        if message.id == identifier and error_code is None:
+            failed += 1
+            raise SQLAlchemyError(f"synthetic reply insertion failure with challenge {token}")
+        return reply_to_inbound(
+            session, message, body, error_code=error_code, conversation_version=conversation_version
+        )
+
+    monkeypatch.setattr(tara_service, "reply_to_inbound", fail_confirmation_reply)
+    for attempt in range(MAX_ATTEMPTS):
+        if attempt:
+            with database.admin.begin() as connection:
+                connection.execute(
+                    text("UPDATE messages SET available_at = now() WHERE id = :id"),
+                    {"id": identifier},
+                )
+        assert worker.process_delivery(identifier)
+    assert failed == MAX_ATTEMPTS
+    assert len(ai.requests) == requests
+    assert state(database)["notes"] == before["notes"]
+    assert state(database)["version"] == before["version"]
+    assert rows(database, "tara_pending_proposals")[0]["status"] == "pending"
+    [reply] = rows(database, "messages", "WHERE reply_to_id = :id", {"id": identifier})
+    assert reply["body"] == tara_service.FALLBACK
+    [run] = rows(database, "tara_runs", "WHERE message_id = :id", {"id": identifier})
+    assert run["error_code"] == "processing_failed"
+    assert run["action"] == "proposal_unavailable"
+
+    assert worker.process_delivery(accept(messaging_client, "Hello after recovery"))
+    assert token not in ai.requests[-1].payload()
+    assert any(turn["text"] == "Hello" for turn in ai.requests[-1].history)
+    assert token not in caplog.text
+    [inbound] = rows(database, "messages", "WHERE id = :id", {"id": identifier})
+    assert token not in inbound["body"]
+    assert inbound["processing_attempts"] == MAX_ATTEMPTS
+
+
+@pytest.mark.parametrize("first", ["confirmation", "revocation"])
+def test_confirmation_and_phone_revocation_serialize(
+    first, messaging_client, database, seed, bearer, monkeypatch
+):
+    worker, ai = established(messaging_client, database, seed, bearer)
+    before = state(database)
+    _, _, outbox, token = propose(messaging_client, database, worker, ai)
+    accept_preview(database, outbox)
+    identifier = accept(messaging_client, f"APPLY {token}")
+    [link] = rows(database, "phone_links")
+    started = {"confirmation": Event(), "revocation": Event()}
+    first_locked = Event()
+    release_first = Event()
+    pids = {}
+    authorise = worker.tara._authorise
+    revoke = messaging_routes.revoke_link
+    checks = 0
+
+    def reached(kind, session):
+        pids[kind] = session.scalar(text("SELECT pg_backend_pid()"))
+        started[kind].set()
+
+    def hold_first(kind):
+        if kind == first:
+            first_locked.set()
+            assert release_first.wait(10)
+
+    def check_confirmation(session, job, **kwargs):
+        nonlocal checks
+        checks += 1
+        if checks != 2:
+            return authorise(session, job, **kwargs)
+        reached("confirmation", session)
+        authorise(session, job, **kwargs)
+        hold_first("confirmation")
+
+    def revoke_phone(session, identity, tenant_id, link_id):
+        reached("revocation", session)
+        revoke(session, identity, tenant_id, link_id)
+        session.flush()
+        hold_first("revocation")
+
+    def unlink():
+        return messaging_client.delete(
+            f"{link_path(seed)}/{link['id']}", headers=bearer("owner-a")
+        ).status_code
+
+    monkeypatch.setattr(worker.tara, "_authorise", check_confirmation)
+    monkeypatch.setattr(messaging_routes, "revoke_link", revoke_phone)
+    operations = {
+        "confirmation": lambda: worker.process_delivery(identifier),
+        "revocation": unlink,
+    }
+    second = "revocation" if first == "confirmation" else "confirmation"
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first_result = pool.submit(operations[first])
+        try:
+            assert first_locked.wait(5)
+            second_result = pool.submit(operations[second])
+            assert started[second].wait(5)
+            assert pids[first] != pids[second]
+            deadline = monotonic() + 3
+            with database.admin.connect() as connection:
+                while not second_result.done() and monotonic() < deadline:
+                    blockers = connection.scalar(
+                        text("SELECT pg_blocking_pids(:pid)"), {"pid": pids[second]}
+                    )
+                    if pids[first] in blockers:
+                        break
+                    release_first.wait(0.01)
+                else:
+                    blockers = []
+        finally:
+            release_first.set()
+        outcomes = {first: first_result.result(10), second: second_result.result(10)}
+    assert outcomes == {"confirmation": True, "revocation": 204}
+    assert rows(database, "phone_links")[0]["revoked_at"] is not None
+    [proposal_row] = rows(database, "tara_pending_proposals")
+    after = state(database)
+    if first == "confirmation":
+        assert after["notes"]["amount"] == "700"
+        assert after["version"] == before["version"] + 1
+        assert proposal_row["status"] == "confirmed"
+    else:
+        assert (after["notes"], after["version"]) == (before["notes"], before["version"])
+        assert proposal_row["status"] == "pending"
+        [job] = rows(database, "message_jobs", "WHERE id = :id", {"id": identifier})
+        assert job["last_error"] == "access_revoked"
+        assert rows(database, "messages", "WHERE reply_to_id = :id", {"id": identifier}) == []
+    assert pids[first] in blockers
 
 
 def test_version_change_while_waiting_for_preview_prevents_apply(
@@ -311,13 +527,13 @@ def test_version_change_while_waiting_for_preview_prevents_apply(
     original = worker.tara._authorise
     calls = 0
 
-    def change_before_final_check(session, job):
+    def change_before_final_check(session, job, **kwargs):
         nonlocal calls
         calls += 1
         if calls == 2:
             with database.admin.begin() as connection:
                 connection.execute(text("UPDATE tara_states SET version = version + 1"))
-        return original(session, job)
+        return original(session, job, **kwargs)
 
     monkeypatch.setattr(worker.tara, "_authorise", change_before_final_check)
     assert worker.process_delivery(identifier)
@@ -389,7 +605,7 @@ def test_memory_expiring_while_waiting_cannot_be_confirmed(
     original = worker.tara._authorise
     calls = 0
 
-    def expire_before_final_check(session, job):
+    def expire_before_final_check(session, job, **kwargs):
         nonlocal calls
         calls += 1
         if calls == 2:
@@ -397,7 +613,7 @@ def test_memory_expiring_while_waiting_cannot_be_confirmed(
                 connection.execute(
                     text("UPDATE tara_states SET memory_since = now() - interval '31 days'")
                 )
-        return original(session, job)
+        return original(session, job, **kwargs)
 
     monkeypatch.setattr(worker.tara, "_authorise", expire_before_final_check)
     assert worker.process_delivery(identifier)

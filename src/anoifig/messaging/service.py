@@ -15,6 +15,7 @@ from anoifig.db.session import set_identity_context
 from anoifig.identity.auth import VerifiedIdentity
 from anoifig.identity.service import AccessDenied, TenantAccess, authorise_tenant
 from anoifig.messaging.webhooks import InboundPayload
+from anoifig.tara.privacy import CONFIRMATION, OMITTED_CONFIRMATION, is_confirmation_shaped
 
 TARA_RESPONSE = (
     "Hi, I'm Tara, your An Oifig assistant. Your message has been received successfully."
@@ -153,18 +154,23 @@ def resolve_phone(session: Session, phone: str, token: str | None = None) -> Rou
     return route
 
 
-def authorise_route(session: Session, route: Route) -> tuple[TenantAccess, PhoneLink]:
+def authorise_route(
+    session: Session, route: Route, *, lock_link: bool = False
+) -> tuple[TenantAccess, PhoneLink]:
     set_identity_context(session, route.identity)
     access = authorise_tenant(session, route.identity, route.tenant_id, write=True)
-    link = session.scalar(
-        select(PhoneLink).where(
-            PhoneLink.id == route.link_id,
-            PhoneLink.tenant_id == route.tenant_id,
-            PhoneLink.user_id == access.user_id,
-            PhoneLink.verified_at.is_not(None),
-            PhoneLink.revoked_at.is_(None),
-        )
+    query = select(PhoneLink).where(
+        PhoneLink.id == route.link_id,
+        PhoneLink.tenant_id == route.tenant_id,
+        PhoneLink.user_id == access.user_id,
+        PhoneLink.verified_at.is_not(None),
+        PhoneLink.revoked_at.is_(None),
     )
+    if lock_link:
+        # FOR SHARE conflicts with revocation and permits foreign-key KEY SHARE
+        # locks on the same link. PostgreSQL rechecks the predicate after a wait.
+        query = query.with_for_update(read=True)
+    link = session.scalar(query)
     if link is None:
         raise AccessDenied
     return access, link
@@ -206,6 +212,10 @@ def accept_inbound(session: Session, payload: InboundPayload) -> UUID | None:
     if conversation is None:
         raise AccessDenied
     now = datetime.now(UTC)
+    body = payload.body
+    # Only an exact command needs its challenge for asynchronous verification.
+    if CONFIRMATION.fullmatch(body) is None and is_confirmation_shaped(body):
+        body = OMITTED_CONFIRMATION
     message_id = session.scalar(
         insert(Message)
         .values(
@@ -215,7 +225,7 @@ def accept_inbound(session: Session, payload: InboundPayload) -> UUID | None:
             phone_link_id=link.id,
             user_id=access.user_id,
             direction="inbound",
-            body=payload.body,
+            body=body,
             twilio_sid=payload.message_sid,
             account_sid=payload.account_sid,
             status="received",
