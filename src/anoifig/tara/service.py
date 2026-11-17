@@ -2,6 +2,9 @@
 
 import json
 import logging
+import re
+import secrets
+import unicodedata
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import ROUND_UP, Decimal
@@ -12,9 +15,9 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from anoifig.config import Settings
-from anoifig.db.messaging_models import Conversation, Message
+from anoifig.db.messaging_models import Conversation, Message, Outbox
 from anoifig.db.session import check_runtime_database
-from anoifig.db.tara_models import TaraRun, TaraState, TaraUsage
+from anoifig.db.tara_models import TaraPendingProposal, TaraRun, TaraState, TaraUsage
 from anoifig.identity.service import AccessDenied
 from anoifig.messaging.service import Job, authorise_route, reply_to_inbound
 from anoifig.tara.privacy import minimise
@@ -49,6 +52,31 @@ CAPABILITIES = (
     "PDFs, quotations, payments, expenses and reminders aren't available yet."
 )
 FORGET_COMMANDS = {"forget my notes", "clear my notes", "start a new invoice", "start over"}
+CONFIRMATION = re.compile(r"(APPLY|REJECT) ([0-9A-F]{32})")
+CHALLENGE_MENTION = re.compile(r"\b[0-9A-F]{32}\b", re.I)
+
+
+def proposal_preview(before: dict[str, object], after: dict[str, object], challenge: str) -> str:
+    def quoted(value: object) -> str:
+        rendered = json.dumps(value, ensure_ascii=False, sort_keys=True)
+        return "".join(
+            json.dumps(char, ensure_ascii=True)[1:-1]
+            if unicodedata.category(char) in {"Cc", "Cf", "Cs", "Zl", "Zp"}
+            else char
+            for char in rendered
+        )
+
+    lines = ["Proposed changes (not saved):"]
+    for field in sorted(before):
+        if before[field] != after[field]:
+            old = quoted(before[field])
+            new = quoted(after[field])
+            lines.append(f"{field}: {old} → {new}")
+    lines.append(f"Reply APPLY {challenge} to save, or REJECT {challenge} to discard.")
+    preview = "\n".join(lines)
+    if len(preview) > 1600 or "\x00" in preview:
+        raise ValueError("proposal preview too long")
+    return preview
 
 
 @dataclass(frozen=True)
@@ -148,13 +176,19 @@ class TaraService:
                 session.flush()
             if state.user_id != message.user_id:
                 raise AccessDenied
-            if min(state.updated_at, state.memory_since) < now - timedelta(
+            confirmation = CONFIRMATION.fullmatch(message.body)
+            memory_expired = min(state.updated_at, state.memory_since) < now - timedelta(
                 days=self.settings.tara_memory_days
-            ):
-                self._clear_memory(state, message)
+            )
+            if memory_expired and confirmation is None:
+                self._clear_memory(session, state, message)
             if run is not None:
                 self._finish(session, message, state, run, FALLBACK, "processing_interrupted")
                 return True
+            if confirmation is not None:
+                return self._confirmation(
+                    session, job, message, state, confirmation, now, memory_expired=memory_expired
+                )
             run = TaraRun(
                 message_id=message.id,
                 tenant_id=message.tenant_id,
@@ -172,8 +206,19 @@ class TaraService:
                 expected_version=state.version,
             )
             session.add(run)
+            if CHALLENGE_MENTION.search(message.body):
+                run.action = "proposal_unavailable"
+                self._finish(
+                    session,
+                    message,
+                    state,
+                    run,
+                    "Please send the exact APPLY or REJECT command from the preview.",
+                    None,
+                )
+                return True
             if message.body.strip().casefold() in FORGET_COMMANDS:
-                self._clear_memory(state, message)
+                self._clear_memory(session, state, message)
                 run.action = "memory_cleared"
                 self._finish(
                     session,
@@ -188,7 +233,7 @@ class TaraService:
             try:
                 notes = InvoiceNotes.model_validate(state.notes)
             except ValueError:
-                self._clear_memory(state, message)
+                self._clear_memory(session, state, message)
                 self._finish(session, message, state, run, INVALID, "state_invalid")
                 return True
             history = self._history(session, message, state, notes, now)
@@ -222,12 +267,153 @@ class TaraService:
             return Command(job, message.id, run.token, request, state.version)
 
     @staticmethod
-    def _clear_memory(state: TaraState, message: Message) -> None:
+    def _clear_memory(session: Session, state: TaraState, message: Message) -> None:
+        pending = session.scalar(
+            select(TaraPendingProposal)
+            .where(
+                TaraPendingProposal.conversation_id == state.conversation_id,
+                TaraPendingProposal.tenant_id == state.tenant_id,
+                TaraPendingProposal.status == "pending",
+            )
+            .with_for_update()
+        )
+        if pending is not None:
+            pending.status = "superseded"
         # Acceptance position is durable even if following messages are already queued.
         state.notes, state.pending_clarification = {}, None
         state.memory_since, state.memory_after_id = message.received_at, message.id
         state.updated_at = datetime.now(UTC)
         state.version += 1
+
+    def _confirmation(
+        self,
+        session: Session,
+        job: Job,
+        message: Message,
+        state: TaraState,
+        command: re.Match[str],
+        now: datetime,
+        *,
+        memory_expired: bool,
+    ) -> bool:
+        proposal = session.scalar(
+            select(TaraPendingProposal)
+            .where(
+                TaraPendingProposal.tenant_id == message.tenant_id,
+                TaraPendingProposal.user_id == message.user_id,
+                TaraPendingProposal.conversation_id == message.conversation_id,
+                TaraPendingProposal.challenge == command.group(2),
+                TaraPendingProposal.status == "pending",
+            )
+            .with_for_update()
+        )
+        body = "That proposal is no longer available. Please send the changes again."
+        action = "proposal_unavailable"
+        if proposal is not None and proposal.expires_at <= now:
+            proposal.status = "expired"
+        elif proposal is not None and (
+            memory_expired or proposal.expected_version != state.version
+        ):
+            proposal.status = "superseded"
+        elif proposal is not None:
+            # The preview is the unique reply/outbox of the originating turn.
+            preview = session.execute(
+                select(Message, Outbox)
+                .join(
+                    Outbox,
+                    (Outbox.message_id == Message.id) & (Outbox.tenant_id == Message.tenant_id),
+                )
+                .where(
+                    Message.tenant_id == message.tenant_id,
+                    Message.reply_to_id == proposal.source_message_id,
+                )
+                .with_for_update(of=Outbox)
+            ).one_or_none()
+            if preview is None:
+                raise ValueError("missing proposal preview")
+            preview_message, outbox = preview
+            session.refresh(preview_message, with_for_update=True)
+            # The outbox lock can wait behind callback reconciliation. Refresh
+            # identity/role and clock after waiting, before authorising a write.
+            session.flush()
+            session.expire_all()
+            self._authorise(session, job)
+            source = session.get(Message, proposal.source_message_id)
+            if proposal.expires_at <= datetime.now(UTC):
+                proposal.status = "expired"
+            elif (
+                proposal.expected_version != state.version
+                or min(state.updated_at, state.memory_since)
+                < datetime.now(UTC) - timedelta(days=self.settings.tara_memory_days)
+                or (
+                    source is None
+                    or (message.received_at, message.id)
+                    <= (
+                        source.received_at,
+                        source.id,
+                    )
+                    or preview_message.body
+                    != proposal_preview(
+                        proposal.before_notes, proposal.after_notes, proposal.challenge
+                    )
+                )
+            ):
+                proposal.status = "superseded"
+            elif outbox.status in {"pending", "retry", "dispatching", "uncertain"}:
+                return False
+            elif outbox.status != "sent" or preview_message.status in {
+                "failed",
+                "canceled",
+                "undelivered",
+                "blocked",
+            }:
+                proposal.status = "superseded"
+            elif command.group(1) == "REJECT":
+                proposal.status = "rejected"
+                proposal.confirmation_message_id = message.id
+                body, action = (
+                    "The proposed changes were rejected. Your notes are unchanged.",
+                    "proposal_rejected",
+                )
+            elif (
+                InvoiceNotes.model_validate(state.notes).model_dump(mode="json")
+                != proposal.before_notes
+            ):
+                proposal.status = "superseded"
+            else:
+                notes = InvoiceNotes.model_validate(proposal.after_notes)
+                state.notes = notes.model_dump(mode="json")
+                state.version += 1
+                state.pending_clarification = self._pending(notes)
+                proposal.status = "confirmed"
+                proposal.confirmation_message_id = message.id
+                body = render_notes(notes, correction=True)
+                action = (
+                    "contact_proposal_confirmed"
+                    if proposal.before_notes.get("customer_details")
+                    != proposal.after_notes.get("customer_details")
+                    else "proposal_confirmed"
+                )
+        run = TaraRun(
+            message_id=message.id,
+            tenant_id=message.tenant_id,
+            conversation_id=message.conversation_id,
+            user_id=message.user_id,
+            token=uuid4(),
+            expires_at=now + timedelta(minutes=2),
+            status="processing",
+            model="application",
+            prompt_version=PROMPT_VERSION,
+            started_at=now,
+            usage_day=now.date(),
+            reserved_tokens=0,
+            reserved_cost=Decimal("0"),
+            expected_version=state.version,
+            action=action,
+        )
+        session.add(run)
+        self._finish(session, message, state, run, body, None)
+        return True
 
     def _history(
         self,
@@ -255,7 +441,20 @@ class TaraService:
                 # contact corrections recorded before contact-specific audit
                 # metadata existed. This rule does not rely on model intent.
                 (TaraRun.action.is_(None))
-                | (TaraRun.action.not_in(("notes_merged", "contact_notes_merged"))),
+                | (
+                    TaraRun.action.not_in(
+                        (
+                            "notes_merged",
+                            "contact_notes_merged",
+                            "proposal_pending",
+                            "proposal_noop",
+                            "proposal_confirmed",
+                            "contact_proposal_confirmed",
+                            "proposal_rejected",
+                            "proposal_unavailable",
+                        )
+                    )
+                ),
                 Message.received_at >= now - timedelta(days=self.settings.tara_memory_days),
                 tuple_(Message.received_at, Message.id)
                 < tuple_(literal(message.received_at), literal(message.id)),
@@ -428,25 +627,54 @@ class TaraService:
         if decision.proposal is not None:
             # This is the complete action allowlist. No model-supplied IDs or SQL.
             authorise_route(session, job.route)
+            before = InvoiceNotes.model_validate(state.notes)
             notes = apply_proposal(
-                InvoiceNotes.model_validate(state.notes),
+                before,
                 decision.proposal,
                 message.body,
                 pending_clarification=self._validated_pending(state.pending_clarification),
                 expected_version=run.expected_version,
                 current_version=state.version,
             )
-            state.notes = notes.model_dump(mode="json")
-            state.version += 1
-            state.pending_clarification = self._pending(notes)
-            # Audit contact-bearing edits from the accepted fields themselves,
-            # independently of the model's top-level intent classification.
-            contact_bearing = any(
-                change.field == "customer_details" for change in decision.proposal.changes
+            previous, proposed = before.model_dump(mode="json"), notes.model_dump(mode="json")
+            if previous == proposed:
+                run.action = "proposal_noop"
+                state.pending_clarification = self._pending(before)
+                return render_notes(before)
+            challenge = secrets.token_hex(16).upper()
+            preview = proposal_preview(previous, proposed, challenge)
+            now = datetime.now(UTC)
+            pending = session.scalar(
+                select(TaraPendingProposal)
+                .where(
+                    TaraPendingProposal.tenant_id == state.tenant_id,
+                    TaraPendingProposal.conversation_id == state.conversation_id,
+                    TaraPendingProposal.status == "pending",
+                )
+                .with_for_update()
+            )
+            if pending is not None:
+                pending.status = "expired" if pending.expires_at <= now else "superseded"
+                session.flush()
+            session.add(
+                TaraPendingProposal(
+                    id=uuid4(),
+                    tenant_id=message.tenant_id,
+                    user_id=message.user_id,
+                    conversation_id=message.conversation_id,
+                    source_message_id=message.id,
+                    expected_version=state.version,
+                    before_notes=previous,
+                    after_notes=proposed,
+                    challenge=challenge,
+                    status="pending",
+                    created_at=now,
+                    expires_at=now + timedelta(hours=24),
+                )
             )
             run.intent = decision.proposal.intent
-            run.action = "contact_notes_merged" if contact_bearing else "notes_merged"
-            return render_notes(notes, correction=decision.proposal.intent == "correction")
+            run.action = "proposal_pending"
+            return preview
         if decision.reply is None:
             raise ValueError("missing structured reply")
         run.intent, run.action = decision.reply.intent.value, "reply"

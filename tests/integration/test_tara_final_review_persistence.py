@@ -5,7 +5,7 @@ from copy import deepcopy
 from pathlib import Path
 
 import pytest
-from test_tara import accept
+from test_tara import accept, confirm_proposal
 from test_tara import messaging_client as messaging_client
 from test_tara_authority_persistence import (
     assert_accepted,
@@ -45,6 +45,7 @@ def test_final_review(case, messaging_client, database, seed, bearer):
     for patch in case["patches"]:
         for change in patch["changes"]:
             expected["line_items"][patch["index"]][change["field"]] = change["value"]
+    confirm_proposal(messaging_client, database, worker, identifier)
     assert_accepted(
         database,
         identifier,

@@ -5,7 +5,7 @@ from copy import deepcopy
 import pytest
 from sqlalchemy import text
 from test_messaging import OTHER_PHONE, rows, set_context, verify_link
-from test_tara import accept, notes
+from test_tara import accept, confirm_proposal, notes
 from test_tara import messaging_client as _messaging_client
 from test_tara_review_corrections import change, proposal, reply_body
 from test_tara_scope_persistence import establish, set_vat
@@ -92,14 +92,19 @@ def assert_controlled_rejection(database, identifier, before):
     assert runs[0]["error_code"] == "invalid_model_response"
 
 
-def assert_accepted(database, identifier, before, expected, *, initial=False):
+def assert_accepted(database, identifier, before, expected, *, client, worker, initial=False):
+    run = rows(database, "tara_runs", "WHERE message_id = :id", {"id": identifier})[0]
+    if run["action"] == "proposal_noop":
+        assert notes(database) == expected == before["notes"]
+        assert rows(database, "tara_states")[0]["version"] == before["version"]
+        return
+    confirmed = confirm_proposal(client, database, worker, identifier)
     assert notes(database) == expected
     assert rows(database, "tara_states")[0]["version"] == before["version"] + 1
-    body = reply_body(database, identifier)
+    body = reply_body(database, confirmed)
     assert ("information is saved for preparation" if initial else "Updated that.") in body
-    run = rows(database, "tara_runs", "WHERE message_id = :id", {"id": identifier})[0]
     assert run["status"] == "complete"
-    assert run["action"] == "notes_merged"
+    assert run["action"] == "proposal_pending"
     assert run["error_code"] is None
 
 
@@ -158,7 +163,9 @@ def test_stated_unit_prices_check_aggregate_amount_against_both_saved_items(
     if accepted:
         expected = deepcopy(before["notes"])
         expected["line_items"][0]["unit_price"] = "30"
-        assert_accepted(database, identifier, before, expected)
+        assert_accepted(
+            database, identifier, before, expected, client=messaging_client, worker=worker
+        )
     else:
         assert_controlled_rejection(database, identifier, before)
 
@@ -169,7 +176,7 @@ def test_formatted_vat_question_replies_do_not_overwrite_either_saved_vat_field(
     message, field, value, evidence, cropped, messaging_client, database, seed, bearer
 ):
     worker, ai = establish(messaging_client, database, seed, bearer)
-    set_vat(worker, ai, messaging_client)
+    set_vat(worker, ai, messaging_client, database)
     before = rows(database, "tara_states")[0]
     ai.results.append(proposal([change(field, value, evidence if cropped else message)]))
     identifier = accept(messaging_client, message)
@@ -184,7 +191,7 @@ def test_a_historical_document_cannot_hide_a_conflicting_current_invoice_asserti
     historical, current, field, cropped, messaging_client, database, seed, bearer
 ):
     worker, ai = establish(messaging_client, database, seed, bearer)
-    set_vat(worker, ai, messaging_client)
+    set_vat(worker, ai, messaging_client, database)
     before = rows(database, "tara_states")[0]
     if field == "vat_rate":
         message = f"Use VAT 23%; {historical} is exempt, but {current} is VAT 0%"
@@ -216,7 +223,7 @@ def test_explicit_unit_and_item_bound_total_updates_keep_other_notes(
     assert worker.process_delivery(identifier)
     expected = deepcopy(before["notes"])
     expected["line_items"][0]["unit_price"] = "30"
-    assert_accepted(database, identifier, before, expected)
+    assert_accepted(database, identifier, before, expected, client=messaging_client, worker=worker)
 
 
 @pytest.mark.parametrize(
@@ -237,12 +244,19 @@ def test_affirmative_vat_updates_keep_unrelated_historical_document_context(
     message, changes, messaging_client, database, seed, bearer
 ):
     worker, ai = establish(messaging_client, database, seed, bearer)
-    set_vat(worker, ai, messaging_client)
+    set_vat(worker, ai, messaging_client, database)
     before = rows(database, "tara_states")[0]
     ai.results.append(proposal([change(field, value, message) for field, value in changes]))
     identifier = accept(messaging_client, message)
     assert worker.process_delivery(identifier)
-    assert_accepted(database, identifier, before, {**before["notes"], **dict(changes)})
+    assert_accepted(
+        database,
+        identifier,
+        before,
+        {**before["notes"], **dict(changes)},
+        client=messaging_client,
+        worker=worker,
+    )
 
 
 @pytest.mark.parametrize("finding", ["aggregate", "vat-list", "historical-current"])
@@ -250,7 +264,7 @@ def test_assertion_rejections_preserve_tenant_b_and_retain_raw_rls_enforcement(
     finding, messaging_client, database, seed, bearer
 ):
     worker, ai = establish(messaging_client, database, seed, bearer)
-    set_vat(worker, ai, messaging_client)
+    set_vat(worker, ai, messaging_client, database)
     before = rows(database, "tara_states")[0]
     verify_link(messaging_client, seed, bearer, phone=OTHER_PHONE, tenant="b", subject="owner-b")
     other_message = "Invoice Una €700 for repairs; no VAT."
@@ -336,7 +350,7 @@ def test_universal_total_guard_rejects_all_alternative_write_paths_before_persis
 ):
     worker, ai = establish(messaging_client, database, seed, bearer)
     if field.startswith("vat_"):
-        set_vat(worker, ai, messaging_client)
+        set_vat(worker, ai, messaging_client, database)
     before = rows(database, "tara_states")[0]
     message = "; ".join(part for part in (evidence, "invoice total €90") if part)
     ai.results.append(alternative_proposal(field, evidence, value))
@@ -358,12 +372,19 @@ def test_universal_total_guard_preserves_supported_scalar_and_vat_writes_without
 ):
     worker, ai = establish(messaging_client, database, seed, bearer)
     if field.startswith("vat_"):
-        set_vat(worker, ai, messaging_client)
+        set_vat(worker, ai, messaging_client, database)
     before = rows(database, "tara_states")[0]
     ai.results.append(alternative_proposal(field, evidence, value))
     identifier = accept(messaging_client, evidence)
     assert worker.process_delivery(identifier)
-    assert_accepted(database, identifier, before, {**before["notes"], field: value})
+    assert_accepted(
+        database,
+        identifier,
+        before,
+        {**before["notes"], field: value},
+        client=messaging_client,
+        worker=worker,
+    )
 
 
 @pytest.mark.parametrize("field,evidence,value", ALTERNATIVE_WRITES[-3:])
@@ -381,4 +402,4 @@ def test_universal_total_guard_allows_matching_totals_with_nonfinancial_proposal
         expected["line_items"][0]["description"] = value
     elif field != "empty":
         expected[field] = value
-    assert_accepted(database, identifier, before, expected)
+    assert_accepted(database, identifier, before, expected, client=messaging_client, worker=worker)

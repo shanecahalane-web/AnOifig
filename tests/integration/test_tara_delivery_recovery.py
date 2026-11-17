@@ -106,11 +106,13 @@ def test_rate_limit_preserves_rapid_financial_correction_order_across_restart(
         if index == 0:
             assert not restarted.process_delivery(outboxes[2]["id"])
     for amount, call in zip((450, 450, 500, 600), provider.calls, strict=True):
-        assert f"€{amount}" in call["body"]
+        assert f'"{amount}"' in call["body"]
     assert len(provider.accepted_sids) == 3
     assert len(set(provider.accepted_sids)) == 3
     assert replacement_ai.requests == []
-    assert notes(database)["amount"] == "600"
+    assert notes(database) == {}
+    pending = [p for p in rows(database, "tara_pending_proposals") if p["status"] == "pending"]
+    assert len(pending) == 1 and pending[0]["after_notes"]["amount"] == "600"
     for outbox in outboxes:
         assert restarted.process_delivery(outbox["id"])
     assert len(provider.calls) == 4
@@ -178,8 +180,8 @@ def test_concurrent_dispatch_preparation_is_serialised_per_conversation(
         assert pending.result(timeout=10)
     assert worker.process_delivery(second["id"])
     assert [
-        "€450" in worker.provider.calls[0]["body"],
-        "€500" in worker.provider.calls[1]["body"],
+        '"450"' in worker.provider.calls[0]["body"],
+        '"500"' in worker.provider.calls[1]["body"],
     ] == [True, True]
 
 
@@ -217,8 +219,8 @@ def test_inflight_send_gates_same_conversation_without_holding_a_database_lock(
     assert worker.process_delivery(second["id"])
     target_calls = [call for call in worker.provider.calls if call["to"] == "whatsapp:" + PHONE]
     assert len(target_calls) == 2
-    assert "€450" in target_calls[0]["body"]
-    assert "€500" in target_calls[1]["body"]
+    assert '"450"' in target_calls[0]["body"]
+    assert '"500"' in target_calls[1]["body"]
 
 
 def test_uncertain_predecessor_waits_for_signed_callback_and_is_never_replayed(

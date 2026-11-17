@@ -8,7 +8,7 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 from test_messaging import rows, verify_link
-from test_tara import accept, make_worker, model_result, notes
+from test_tara import accept, confirm_proposal, make_worker, model_result, notes
 from test_tara import messaging_client as _messaging_client
 
 from anoifig.messaging.service import lookup_job
@@ -154,10 +154,11 @@ def test_partial_line_item_correction_preserves_other_values_and_is_idempotent(
     ]
     worker, ai = make_worker(messaging_client, results)
     first = accept(messaging_client, first_message)
-    second = accept(messaging_client, correction)
-    assert not worker.process_delivery(second)
     assert worker.process_delivery(first)
+    confirm_proposal(messaging_client, database, worker, first)
+    second = accept(messaging_client, correction)
     assert worker.process_delivery(second)
+    confirm_proposal(messaging_client, database, worker, second)
     expected = [
         {"description": "valves", "quantity": "3", "unit_price": "30"},
         {"description": "elbows", "quantity": "2", "unit_price": "10"},
@@ -169,7 +170,8 @@ def test_partial_line_item_correction_preserves_other_values_and_is_idempotent(
         assert worker.process_delivery(second)
     assert notes(database)["line_items"] == expected
     assert rows(database, "tara_states")[0]["version"] == version
-    assert len(ai.requests) == len(rows(database, "outbox")) == 2
+    assert len(ai.requests) == 2
+    assert len(rows(database, "outbox")) == 4
 
 
 def test_next_payload_omits_prior_contact_details_everywhere(
@@ -192,7 +194,9 @@ def test_next_payload_omits_prior_contact_details_everywhere(
         }
     )
     worker, ai = make_worker(messaging_client, [result])
-    assert worker.process_delivery(accept(messaging_client, message))
+    identifier = accept(messaging_client, message)
+    assert worker.process_delivery(identifier)
+    confirm_proposal(messaging_client, database, worker, identifier)
     assert notes(database)["customer_details"] == contact
     assert worker.process_delivery(accept(messaging_client, "Hi"))
     request = ai.requests[-1]
@@ -272,7 +276,9 @@ def test_bare_vat_answers_require_the_matching_last_question(
         ],
     )
     for message in (initial, "before", "23"):
-        assert worker.process_delivery(accept(messaging_client, message))
+        identifier = accept(messaging_client, message)
+        assert worker.process_delivery(identifier)
+        confirm_proposal(messaging_client, database, worker, identifier)
     assert [r.pending_clarification for r in ai.requests] == [None, "vat_basis", "vat_rate"]
     assert notes(database)["amount"] == "500"
     assert notes(database)["vat_basis"] == "exclusive"

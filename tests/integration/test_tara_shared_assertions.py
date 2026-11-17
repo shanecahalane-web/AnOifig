@@ -5,7 +5,7 @@ from copy import deepcopy
 import pytest
 from sqlalchemy import text
 from test_messaging import OTHER_PHONE, rows, set_context, verify_link
-from test_tara import accept
+from test_tara import accept, confirm_proposal
 from test_tara import messaging_client as _messaging_client
 from test_tara_assertion_persistence import assert_controlled_rejection
 from test_tara_review_corrections import change, proposal, reply_body
@@ -17,7 +17,7 @@ pytestmark = pytest.mark.integration
 
 def prepare(client, database, seed, bearer):
     worker, ai = establish(client, database, seed, bearer)
-    set_vat(worker, ai, client)
+    set_vat(worker, ai, client, database)
     message = "Amount €450; labour €100; materials €350"
     ai.results.append(
         proposal(
@@ -27,7 +27,9 @@ def prepare(client, database, seed, bearer):
             ]
         )
     )
-    assert worker.process_delivery(accept(client, message))
+    identifier = accept(client, message)
+    assert worker.process_delivery(identifier)
+    confirm_proposal(client, database, worker, identifier)
     before = rows(database, "tara_states")[0]
     assert before["notes"]["amount"] == "450"
     verify_link(client, seed, bearer, phone=OTHER_PHONE, tenant="b", subject="owner-b")
@@ -42,7 +44,9 @@ def prepare(client, database, seed, bearer):
             intent="invoice_preparation",
         )
     )
-    assert worker.process_delivery(accept(client, message, phone=OTHER_PHONE))
+    identifier = accept(client, message, phone=OTHER_PHONE)
+    assert worker.process_delivery(identifier)
+    confirm_proposal(client, database, worker, identifier, phone=OTHER_PHONE)
     other = dict(
         next(
             row for row in rows(database, "tara_states") if row["tenant_id"] == seed.businesses["b"]
@@ -143,14 +147,15 @@ def test_an_unbound_total_checks_every_final_item(
     if not accepted:
         assert_controlled_rejection(database, identifier, before)
     else:
+        confirmed = confirm_proposal(messaging_client, database, worker, identifier)
         after = rows(database, "tara_states")[0]
         expected = deepcopy(before["notes"])
         expected["line_items"][0]["unit_price"] = "30"
         assert after["notes"] == expected
         assert after["version"] == before["version"] + 1
-        assert "Updated that." in reply_body(database, identifier)
+        assert "Updated that." in reply_body(database, confirmed)
         run = rows(database, "tara_runs", "WHERE message_id=:id", {"id": identifier})[0]
-        assert run["action"] == "notes_merged" and run["error_code"] is None
+        assert run["action"] == "proposal_pending" and run["error_code"] is None
 
 
 @pytest.mark.parametrize(
@@ -169,6 +174,7 @@ def test_an_explicit_current_document_instruction_can_follow_a_historical_list(
     ai.results.append(proposal([change(field, value, assertion)]))
     identifier = accept(messaging_client, message)
     assert worker.process_delivery(identifier)
+    confirmed = confirm_proposal(messaging_client, database, worker, identifier)
     after = next(
         row
         for row in rows(database, "tara_states")
@@ -176,7 +182,7 @@ def test_an_explicit_current_document_instruction_can_follow_a_historical_list(
     )
     assert after["notes"] == {**before["notes"], field: value}
     assert after["version"] == before["version"] + 1
-    assert "Updated that." in reply_body(database, identifier)
+    assert "Updated that." in reply_body(database, confirmed)
     run = rows(database, "tara_runs", "WHERE message_id=:id", {"id": identifier})[0]
-    assert run["action"] == "notes_merged" and run["error_code"] is None
+    assert run["action"] == "proposal_pending" and run["error_code"] is None
     assert_other_tenant(database, seed, other)

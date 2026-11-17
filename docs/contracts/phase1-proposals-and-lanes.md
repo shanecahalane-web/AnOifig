@@ -1,7 +1,8 @@
 # Phase 1 proposal and lane contracts
 
-Status: approved implementation target and regression baseline. This contract is
-not implemented by commit d0152dfb or by this milestone. Existing ADR 0006 and
+Status: proposal lifecycle implemented by Phase 1 Milestone 2; queue lane
+scheduling remains a future milestone. This contract is not implemented by
+reference commit d0152dfb. Existing ADR 0006 and
 ADR 0005 describe the current implementation; this document describes the
 intended replacement for their conflicting mutation and scheduling behaviour.
 No invoice issuance, tax decision or external delivery is authorised by it.
@@ -104,15 +105,15 @@ reconciliation; stop old workers before migration and never mix ordering schemes
 
 ## Regression baseline and exit
 
-`tests/integration/test_phase1_contract_regressions.py` contains strict expected
-failures against the current code: unsafe persistence, unimplemented confirmation
-flow and predecessor-unaware queue claims. Expected failure means a known unmet
-contract, not a passing safety gate. An unexpected pass is a failure so the test
-must be inspected and converted to an ordinary passing assertion when the feature
-is implemented. Confirmation tests cannot reach their final checks until pending
-proposal creation exists; their expected failure explicitly records that missing
-prerequisite. Existing stale model-completion, tenant isolation, replay and receipt
-fencing tests are independent controls, not evidence that confirmation exists.
+`tests/integration/test_phase1_contract_regressions.py` contained strict expected
+failures against the baseline: unsafe persistence, unimplemented confirmation
+flow and predecessor-unaware queue claims. The seven authority cases are now
+ordinary tests; the two queue cases remain strict expected failures. Expected
+failure means a known unmet contract, not a passing safety gate. An unexpected
+pass is a failure so the test must be inspected and converted to an ordinary
+passing assertion when the queue feature is implemented. Existing stale
+model-completion, tenant isolation, replay and receipt fencing tests remain
+independent controls alongside the new confirmation tests.
 
 Milestone 1 is complete when these contracts, deterministic fixtures and the
 baseline results are committed, and relevant tests run with genuine restricted

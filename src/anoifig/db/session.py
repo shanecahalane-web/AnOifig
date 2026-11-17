@@ -105,6 +105,7 @@ def check_runtime_database(connection: Connection, *, require_tls: bool = False)
             "tara_states",
             "tara_runs",
             "tara_usage",
+            "tara_pending_proposals",
         )
         if table in RUNTIME_TABLE_PRIVILEGES
         for action in ("read_member", "insert_writer", "update_writer")

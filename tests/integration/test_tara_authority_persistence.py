@@ -9,7 +9,7 @@ from copy import deepcopy
 import pytest
 from sqlalchemy import text
 from test_messaging import OTHER_PHONE, rows, set_context, verify_link
-from test_tara import accept
+from test_tara import accept, confirm_proposal
 from test_tara import messaging_client as _messaging_client
 from test_tara_review_corrections import change, proposal
 from test_tara_scope_persistence import ITEMS, establish, set_vat
@@ -46,14 +46,18 @@ def establish_complete(client, database, seed, bearer, *, scalar=False, vat=Fals
                 ]
             )
         )
-        assert worker.process_delivery(accept(client, message))
+        identifier = accept(client, message)
+        assert worker.process_delivery(identifier)
+        confirm_proposal(client, database, worker, identifier)
         assert saved_state(database)["notes"]["amount"] == "600"
     message = "Set customer details to 1 Oak Road"
     ai.results.append(proposal([change("customer_details", "1 Oak Road", message)]))
-    assert worker.process_delivery(accept(client, message))
+    identifier = accept(client, message)
+    assert worker.process_delivery(identifier)
+    confirm_proposal(client, database, worker, identifier)
     assert saved_state(database)["notes"]["customer_details"] == "1 Oak Road"
     if vat:
-        set_vat(worker, ai, client)
+        set_vat(worker, ai, client, database)
         assert saved_state(database)["notes"]["vat_rate"] == "13.5"
     return worker, ai
 
@@ -92,15 +96,30 @@ def assert_rejected(worker, ai, database, identifier, before):
 
 
 def assert_accepted(database, identifier, before, expected, *, contact=False):
+    run = rows(database, "tara_runs", "WHERE message_id = :id", {"id": identifier})[0]
     after = saved_state(database)
     assert after["notes"] == expected
+    if run["action"] == "proposal_noop":
+        assert expected == before["notes"]
+        assert after["version"] == before["version"]
+        return
     assert after["version"] == before["version"] + 1
     replies = rows(database, "messages", "WHERE reply_to_id = :id", {"id": identifier})
     assert len(replies) == 1
-    assert "Updated that." in replies[0]["body"]
-    run = rows(database, "tara_runs", "WHERE message_id = :id", {"id": identifier})[0]
-    assert run["action"] == ("contact_notes_merged" if contact else "notes_merged")
+    assert "Proposed changes (not saved)" in replies[0]["body"]
+    assert run["action"] == "proposal_pending"
     assert run["error_code"] is None
+    proposals = rows(
+        database, "tara_pending_proposals", "WHERE source_message_id = :id", {"id": identifier}
+    )
+    assert len(proposals) == 1
+    assert proposals[0]["status"] == "confirmed"
+
+
+def confirm_if_changed(client, database, worker, identifier):
+    [run] = rows(database, "tara_runs", "WHERE message_id = :id", {"id": identifier})
+    if run["action"] == "proposal_pending":
+        confirm_proposal(client, database, worker, identifier)
 
 
 @pytest.mark.parametrize(
@@ -385,6 +404,7 @@ def test_explicit_item_prices_and_other_item_preservation_remain_supported(
     assert worker.process_delivery(identifier)
     expected = deepcopy(before["notes"])
     expected["line_items"][0]["unit_price"] = "30"
+    confirm_if_changed(messaging_client, database, worker, identifier)
     assert_accepted(database, identifier, before, expected)
 
 
@@ -407,6 +427,7 @@ def test_unambiguous_financial_shorthand_remains_supported(
     ai.results.append(proposal([change(field, value, message)]))
     identifier = accept(messaging_client, message)
     assert worker.process_delivery(identifier)
+    confirm_if_changed(messaging_client, database, worker, identifier)
     assert_accepted(database, identifier, before, {**before["notes"], field: value})
 
 
@@ -431,6 +452,7 @@ def test_current_affirmative_text_updates_keep_financial_state(
     ai.results.append(proposal([change(field, value, value)]))
     identifier = accept(messaging_client, message)
     assert worker.process_delivery(identifier)
+    confirm_if_changed(messaging_client, database, worker, identifier)
     assert_accepted(
         database,
         identifier,
@@ -459,6 +481,7 @@ def test_affirmative_formatted_or_current_vat_instructions_remain_supported(
     )
     identifier = accept(messaging_client, message)
     assert worker.process_delivery(identifier)
+    confirm_if_changed(messaging_client, database, worker, identifier)
     assert_accepted(
         database,
         identifier,

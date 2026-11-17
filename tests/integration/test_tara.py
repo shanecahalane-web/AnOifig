@@ -1,6 +1,7 @@
 """Offline end-to-end conversations through signed WhatsApp ingress and real RLS."""
 
 import json
+import re
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Event
@@ -76,23 +77,44 @@ def notes(database):
     return rows(database, "tara_states")[0]["notes"]
 
 
+def confirm_proposal(client, database, worker, job_id, *, phone=PHONE):
+    [reply] = rows(database, "messages", "WHERE reply_to_id = :id", {"id": job_id})
+    token = re.search(r"APPLY ([0-9A-F]{32})", reply["body"])
+    assert token is not None
+    with database.admin.begin() as connection:
+        connection.execute(
+            text("UPDATE outbox SET status = 'sent' WHERE message_id = :id"),
+            {"id": reply["id"]},
+        )
+    confirmed = accept(client, f"APPLY {token.group(1)}", phone=phone)
+    assert worker.process_delivery(confirmed)
+    return confirmed
+
+
 @pytest.mark.parametrize("scenario", SCENARIOS, ids=lambda item: item["name"])
 def test_realistic_conversation(scenario, messaging_client, database, seed, bearer):
     verify_link(messaging_client, seed, bearer)
     worker, ai = make_worker(messaging_client)
+    confirmations = 0
     for turn in scenario["turns"]:
         if turn["decision"] is not None:
             ai.results.append(model_result(turn["decision"]))
         job_id = accept(messaging_client, turn["message"])
         assert worker.process_delivery(job_id)
         reply = rows(database, "messages", "WHERE reply_to_id = :id", {"id": job_id})[0]
+        run = rows(database, "tara_runs", "WHERE message_id = :id", {"id": job_id})[0]
+        if run["action"] == "proposal_pending":
+            assert "not saved" in reply["body"]
+            confirmed = confirm_proposal(messaging_client, database, worker, job_id)
+            reply = rows(database, "messages", "WHERE reply_to_id = :id", {"id": confirmed})[0]
+            confirmations += 1
         assert turn["reply_contains"] in reply["body"]
         assert worker.process_delivery(job_id)
         assert len(rows(database, "messages", "WHERE reply_to_id = :id", {"id": job_id})) == 1
     persisted = notes(database)
     for field, expected in scenario["expected_notes"].items():
         assert persisted.get(field) == expected
-    assert len(rows(database, "outbox")) == len(scenario["turns"])
+    assert len(rows(database, "outbox")) == len(scenario["turns"]) + confirmations
     assert all(run["status"] == "complete" for run in rows(database, "tara_runs"))
 
 
@@ -234,7 +256,9 @@ def test_state_survives_restart_and_expired_memory_is_not_sent(
     verify_link(messaging_client, seed, bearer)
     first = SCENARIOS[0]["turns"][0]
     worker, _ = make_worker(messaging_client, [model_result(first["decision"])])
-    worker.process_delivery(accept(messaging_client, first["message"]))
+    job_id = accept(messaging_client, first["message"])
+    worker.process_delivery(job_id)
+    confirm_proposal(messaging_client, database, worker, job_id)
     restarted, ai = make_worker(messaging_client)
     restarted.process_delivery(accept(messaging_client, "Hello again"))
     assert ai.requests[0].notes["customer_name"] == "John"
@@ -302,7 +326,9 @@ def test_real_process_crash_keeps_notes_and_conservative_reservation(
     verify_link(messaging_client, seed, bearer)
     first = SCENARIOS[0]["turns"][0]
     worker, _ = make_worker(messaging_client, [model_result(first["decision"])])
-    worker.process_delivery(accept(messaging_client, first["message"]))
+    job_id = accept(messaging_client, first["message"])
+    worker.process_delivery(job_id)
+    confirm_proposal(messaging_client, database, worker, job_id)
     crashed_job = accept(messaging_client, "Actually 500")
     config = worker.settings.model_dump(
         mode="json",
@@ -363,7 +389,9 @@ def test_real_process_crash_keeps_notes_and_conservative_reservation(
         }
     }
     ai.results.append(model_result(correction))
-    restarted.process_delivery(accept(messaging_client, "Actually 500"))
+    job_id = accept(messaging_client, "Actually 500")
+    restarted.process_delivery(job_id)
+    confirm_proposal(messaging_client, database, restarted, job_id)
     assert notes(database)["amount"] == "500"
     assert notes(database)["customer_name"] == "John"
 
@@ -400,7 +428,9 @@ def test_memory_limits_forget_and_pii_minimisation(messaging_client, database, s
     worker, ai = make_worker(messaging_client, tara_history_messages=1)
     for turn in contact["turns"][:2]:
         ai.results.append(model_result(turn["decision"]))
-        worker.process_delivery(accept(messaging_client, turn["message"]))
+        job_id = accept(messaging_client, turn["message"])
+        worker.process_delivery(job_id)
+        confirm_proposal(messaging_client, database, worker, job_id)
     worker.process_delivery(accept(messaging_client, "Thanks"))
     assert "customer_details" not in ai.requests[-1].notes
     assert len(ai.requests[-1].history) <= 1
@@ -458,7 +488,9 @@ def test_provider_context_does_not_cross_tenant_or_user(
         verify_link(messaging_client, seed, bearer, phone=OTHER_PHONE, subject="staff-a")
     first = SCENARIOS[0]["turns"][0]
     worker, ai = make_worker(messaging_client, [model_result(first["decision"])])
-    worker.process_delivery(accept(messaging_client, first["message"]))
+    job_id = accept(messaging_client, first["message"])
+    worker.process_delivery(job_id)
+    confirm_proposal(messaging_client, database, worker, job_id)
     worker.process_delivery(accept(messaging_client, "Hello", phone=OTHER_PHONE))
     assert ai.requests[-1].notes["customer_name"] is None
     assert ai.requests[-1].history == ()

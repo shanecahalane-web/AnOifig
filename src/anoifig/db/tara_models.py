@@ -9,9 +9,11 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKeyConstraint,
+    Index,
     Integer,
     Numeric,
     String,
+    UniqueConstraint,
     func,
     text,
 )
@@ -99,3 +101,51 @@ class TaraUsage(Base):
     requests: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     tokens: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     cost_usd: Mapped[Decimal] = mapped_column(Numeric(18, 8), nullable=False, server_default="0")
+
+
+class TaraPendingProposal(Base):
+    __tablename__ = "tara_pending_proposals"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "source_message_id", "conversation_id", "user_id"],
+            ["messages.tenant_id", "messages.id", "messages.conversation_id", "messages.user_id"],
+            name="fk_proposal_source",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "confirmation_message_id", "conversation_id", "user_id"],
+            ["messages.tenant_id", "messages.id", "messages.conversation_id", "messages.user_id"],
+            name="fk_proposal_confirmation",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "conversation_id", "user_id"],
+            ["conversations.tenant_id", "conversations.id", "conversations.user_id"],
+            name="fk_proposal_conversation",
+        ),
+        UniqueConstraint("source_message_id", name="tara_pending_proposals_source_message_id_key"),
+        UniqueConstraint(
+            "confirmation_message_id", name="tara_pending_proposals_confirmation_message_id_key"
+        ),
+        UniqueConstraint("challenge", name="tara_pending_proposals_challenge_key"),
+        Index("ix_tara_pending_proposals_tenant_id", "tenant_id"),
+        Index(
+            "uq_tara_pending_per_conversation",
+            "tenant_id",
+            "conversation_id",
+            unique=True,
+            postgresql_where=text("status = 'pending'"),
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(primary_key=True)
+    tenant_id: Mapped[UUID] = mapped_column(nullable=False)
+    user_id: Mapped[UUID] = mapped_column(nullable=False)
+    conversation_id: Mapped[UUID] = mapped_column(nullable=False)
+    source_message_id: Mapped[UUID] = mapped_column(nullable=False)
+    confirmation_message_id: Mapped[UUID | None] = mapped_column()
+    expected_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    before_notes: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False)
+    after_notes: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False)
+    challenge: Mapped[str] = mapped_column(String(32), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

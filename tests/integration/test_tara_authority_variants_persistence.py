@@ -9,6 +9,7 @@ from test_tara import messaging_client as _messaging_client
 from test_tara_authority_persistence import (
     assert_accepted,
     assert_rejected,
+    confirm_if_changed,
     establish_complete,
     item_patch,
     saved_state,
@@ -78,6 +79,7 @@ def test_specific_charge_labels_keep_their_own_field_and_other_values(
     ai.results.append(proposal([change(field, value, message)]))
     identifier = accept(messaging_client, message)
     assert worker.process_delivery(identifier)
+    confirm_if_changed(messaging_client, database, worker, identifier)
     assert_accepted(database, identifier, before, {**before["notes"], field: value})
 
 
@@ -114,6 +116,7 @@ def test_supplied_text_can_contain_customer_words(
     ai.results.append(proposal([change(field, value, value)]))
     identifier = accept(messaging_client, message)
     assert worker.process_delivery(identifier)
+    confirm_if_changed(messaging_client, database, worker, identifier)
     assert_accepted(database, identifier, before, {**before["notes"], field: value})
 
 
@@ -141,6 +144,7 @@ def test_document_qualified_other_item_preservation_keeps_valid_price_update(
     assert worker.process_delivery(identifier)
     expected = deepcopy(before["notes"])
     expected["line_items"][0]["unit_price"] = "30"
+    confirm_if_changed(messaging_client, database, worker, identifier)
     assert_accepted(database, identifier, before, expected)
 
 
@@ -177,7 +181,9 @@ def test_customer_question_does_not_confirm_a_listed_name(
             intent="invoice_preparation",
         )
     )
-    assert worker.process_delivery(accept(messaging_client, initial))
+    identifier = accept(messaging_client, initial)
+    assert worker.process_delivery(identifier)
+    confirm_if_changed(messaging_client, database, worker, identifier)
     before = saved_state(database)
     assert before["notes"]["customer_name"] is None
     assert before["notes"]["amount"] == "600"

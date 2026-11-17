@@ -1,7 +1,7 @@
 """Executable Phase 1 contract checks against signed ingress and PostgreSQL.
 
-Expected failures expose missing architecture, not passing security guarantees.
-Confirmation checks currently stop at the missing pending-proposal prerequisite.
+The authority cases cover the new lifecycle. The two queue expected failures
+expose work intentionally deferred to the next milestone.
 """
 
 import json
@@ -64,9 +64,6 @@ def pending_preview(messaging_client, database, worker, ai):
     return before, match.group(1)
 
 
-@pytest.mark.xfail(
-    strict=True, raises=AssertionError, reason="unconfirmed model proposal mutates notes"
-)
 @pytest.mark.parametrize("message", ["Invoice awaiting payment €700", "Invoice overdue €700"])
 @pytest.mark.parametrize("cropped", [False, True], ids=["full-evidence", "cropped-evidence"])
 def test_status_message_cannot_change_saved_amount(
@@ -82,9 +79,6 @@ def test_status_message_cannot_change_saved_amount(
     assert (after["notes"], after["version"]) == (before["notes"], before["version"])
 
 
-@pytest.mark.xfail(
-    strict=True, raises=AssertionError, reason="pending proposal prerequisite not implemented"
-)
 def test_stale_confirmation_cannot_overwrite_newer_notes(messaging_client, database, seed, bearer):
     worker, ai = established(messaging_client, database, seed, bearer)
     before, token = pending_preview(messaging_client, database, worker, ai)
@@ -97,9 +91,6 @@ def test_stale_confirmation_cannot_overwrite_newer_notes(messaging_client, datab
     assert after["version"] == updated["version"]
 
 
-@pytest.mark.xfail(
-    strict=True, raises=AssertionError, reason="pending proposal prerequisite not implemented"
-)
 def test_confirmed_proposal_is_consumed_once_on_replay(messaging_client, database, seed, bearer):
     worker, ai = established(messaging_client, database, seed, bearer)
     before, token = pending_preview(messaging_client, database, worker, ai)
@@ -114,9 +105,6 @@ def test_confirmed_proposal_is_consumed_once_on_replay(messaging_client, databas
     assert len(rows(database, "messages", "WHERE reply_to_id = :id", {"id": identifier})) == 1
 
 
-@pytest.mark.xfail(
-    strict=True, raises=AssertionError, reason="pending proposal prerequisite not implemented"
-)
 def test_other_tenant_cannot_confirm_proposal(messaging_client, database, seed, bearer):
     worker, ai = established(messaging_client, database, seed, bearer)
     before, token = pending_preview(messaging_client, database, worker, ai)

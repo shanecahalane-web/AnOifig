@@ -6,7 +6,7 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 from test_messaging import rows, verify_link
-from test_tara import accept, make_worker, notes
+from test_tara import accept, confirm_proposal, make_worker, notes
 from test_tara import messaging_client as _messaging_client
 from test_tara_review_corrections import change, complete_notes, proposal, reply_body
 
@@ -44,7 +44,7 @@ def test_currency_qualifiers_cannot_change_saved_eur_amount(
 ):
     verify_link(messaging_client, seed, bearer)
     worker, ai = make_worker(messaging_client)
-    complete_notes(worker, ai, messaging_client)
+    complete_notes(worker, ai, messaging_client, database)
     previous_state = rows(database, "tara_states")[0]
     assert notes(database)["amount"] == "500"
     evidence = "625" if cropped_evidence else message
@@ -52,7 +52,7 @@ def test_currency_qualifiers_cannot_change_saved_eur_amount(
     identifier = accept(messaging_client, message)
     assert worker.process_delivery(identifier)
     assert_rejected_correction(database, identifier, previous_state)
-    assert len(rows(database, "outbox")) == 2
+    assert len(rows(database, "outbox")) == 3
 
 
 @pytest.mark.parametrize(
@@ -74,12 +74,14 @@ def test_vat_rejections_and_questions_cannot_be_saved_as_assertions(
 ):
     verify_link(messaging_client, seed, bearer)
     worker, ai = make_worker(messaging_client)
-    complete_notes(worker, ai, messaging_client)
+    complete_notes(worker, ai, messaging_client, database)
     valid = "Use VAT rate 13.5%, excluding VAT."
     ai.results.append(
         proposal([change("vat_basis", "exclusive", valid), change("vat_rate", "13.5", valid)])
     )
-    assert worker.process_delivery(accept(messaging_client, valid))
+    initial = accept(messaging_client, valid)
+    assert worker.process_delivery(initial)
+    confirm_proposal(messaging_client, database, worker, initial)
     previous_state = rows(database, "tara_states")[0]
     assert notes(database)["vat_basis"] == "exclusive"
     assert notes(database)["vat_rate"] == "13.5"
@@ -88,7 +90,7 @@ def test_vat_rejections_and_questions_cannot_be_saved_as_assertions(
     identifier = accept(messaging_client, message)
     assert worker.process_delivery(identifier)
     assert_rejected_correction(database, identifier, previous_state)
-    assert len(rows(database, "outbox")) == 3
+    assert len(rows(database, "outbox")) == 5
 
 
 @pytest.mark.parametrize(
@@ -108,19 +110,21 @@ def test_soft_assessment_boundaries_preserve_existing_notes(
 ):
     verify_link(messaging_client, seed, bearer)
     worker, ai = make_worker(messaging_client)
-    complete_notes(worker, ai, messaging_client)
+    complete_notes(worker, ai, messaging_client, database)
     valid = "Use VAT rate 13.5%, excluding VAT."
     ai.results.append(
         proposal([change("vat_basis", "exclusive", valid), change("vat_rate", "13.5", valid)])
     )
-    assert worker.process_delivery(accept(messaging_client, valid))
+    initial = accept(messaging_client, valid)
+    assert worker.process_delivery(initial)
+    confirm_proposal(messaging_client, database, worker, initial)
     previous_state = rows(database, "tara_states")[0]
     evidence = excerpt if cropped_evidence else message
     ai.results.append(proposal([change(field, value, evidence)]))
     identifier = accept(messaging_client, message)
     assert worker.process_delivery(identifier)
     assert_rejected_correction(database, identifier, previous_state)
-    assert len(rows(database, "outbox")) == 3
+    assert len(rows(database, "outbox")) == 5
 
 
 def test_stale_completion_preserves_newer_clarification_and_activity(

@@ -14,7 +14,7 @@ from sqlalchemy.exc import IntegrityError
 from test_messaging import set_context
 from test_messaging_claim_migration import insert_revision_0002_records
 
-from anoifig.db.privileges import provision_runtime_grants
+from anoifig.db.privileges import RUNTIME_TABLE_PRIVILEGES, provision_runtime_grants
 from anoifig.db.session import check_runtime_database
 
 pytestmark = pytest.mark.integration
@@ -154,7 +154,18 @@ def insert_revision_0005_tara_records(database, seed):
 
 def assert_runtime_boundaries(database, seed):
     with database.runtime.begin() as connection:
-        check_runtime_database(connection)
+        # This test deliberately checks the 0005/0006 schema, before proposals
+        # existed. Production continues to require every current table.
+        historical = {
+            name: rights
+            for name, rights in RUNTIME_TABLE_PRIVILEGES.items()
+            if name != "tara_pending_proposals"
+        }
+        with (
+            patch("anoifig.db.privileges.RUNTIME_TABLE_PRIVILEGES", historical),
+            patch("anoifig.db.session.RUNTIME_TABLE_PRIVILEGES", historical),
+        ):
+            check_runtime_database(connection)
         assert connection.scalar(text("SELECT count(*) FROM tara_states")) == 0
         set_context(connection, seed)
         assert connection.scalar(text("SELECT count(*) FROM tara_states")) == 1
@@ -208,7 +219,10 @@ def test_upgrade_downgrade_reupgrade_preserve_0005_records_security_and_grants(d
             assert security_snapshot(database) == security
             assert_new_columns_null(database)
             assert_runtime_boundaries(database, seed)
+            command.upgrade(config, "head")
+            assert durable_snapshot(database) == before
             command.check(config)
+            command.downgrade(config, CURRENT)
 
             # New application metadata is the only intended loss on downgrade.
             # Snapshot after these writes so trigger-managed timestamps are also
@@ -253,7 +267,10 @@ def test_upgrade_downgrade_reupgrade_preserve_0005_records_security_and_grants(d
             assert security_snapshot(database) == security
             assert_new_columns_null(database)
             assert_runtime_boundaries(database, seed)
+            command.upgrade(config, "head")
+            assert durable_snapshot(database) == after_metadata
             command.check(config)
+            command.downgrade(config, CURRENT)
         finally:
             command.upgrade(config, "head")
             with database.admin.begin() as connection:

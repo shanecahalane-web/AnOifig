@@ -23,7 +23,7 @@ RUNTIME_TABLE_PRIVILEGES: dict[str, frozenset[str]] = {
     "message_jobs": frozenset(),
     **{
         table: frozenset({"SELECT", "INSERT", "UPDATE"})
-        for table in ("tara_states", "tara_runs", "tara_usage")
+        for table in ("tara_states", "tara_runs", "tara_usage", "tara_pending_proposals")
     },
 }
 

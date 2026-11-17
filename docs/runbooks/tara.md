@@ -184,3 +184,28 @@ provider spend limits, abuse controls, monitoring, backups/restore and load/fail
 tests. User evidence validates source tokens, not the semantic correctness of the
 model's interpretation. No financial output exists, and this milestone establishes
 no GDPR/tax compliance or production deployment approval.
+
+## Phase 1 pending proposals
+
+Model-derived edits create an unsaved preview, not an immediate notes update.
+The preview shows complete before/after values and an application-generated
+challenge. The user sends the exact `APPLY <challenge>` or `REJECT <challenge>`
+command shown in that preview. Challenges expire 24 hours after creation; a new
+proposal or reset supersedes the older one. An accepted confirmation applies the
+entire previewed change once, subject to current membership and notes version.
+No preparation confirmation authorises invoice issuance.
+
+Confirmation waits without another model invocation while the preview send is
+pending, retrying, dispatching or uncertain. Resolve uncertain delivery using the
+existing signed callback or the documented operator reconciliation procedure;
+never replay an uncertain send automatically. Known failed or blocked previews
+cannot be confirmed. Do not put challenges, preview contents or customer data in
+logs or queue diagnostics.
+
+Migration 0007 adds forced-RLS proposal data and requires the reviewed runtime
+grant provisioning step before workers start. Stop API and workers during the
+migration and grant verification. Downgrading 0007 deletes all pending and
+historical proposal records and invalidates their challenges; prefer a forward
+fix and preserve backup/retention obligations. This milestone does not implement
+the separate conversation-head scheduling change, physical retention/deletion
+sweeps or production deployment controls.

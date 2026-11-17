@@ -5,7 +5,7 @@ from copy import deepcopy
 import pytest
 from sqlalchemy import text
 from test_messaging import OTHER_PHONE, rows, set_context, verify_link
-from test_tara import accept, make_worker, notes
+from test_tara import accept, confirm_proposal, make_worker, notes
 from test_tara import messaging_client as _messaging_client
 from test_tara_merge_blockers import assert_rejected, patch
 from test_tara_review_corrections import change, proposal, reply_body
@@ -72,18 +72,22 @@ def establish(client, database, seed, bearer, *, items=True):
             line_items_evidence=message if items else None,
         )
     )
-    assert worker.process_delivery(accept(client, message))
+    identifier = accept(client, message)
+    assert worker.process_delivery(identifier)
+    confirm_proposal(client, database, worker, identifier)
     assert notes(database)["amount"] is None
     assert notes(database)["line_items"] == (ITEMS if items else [])
     return worker, ai
 
 
-def set_vat(worker, ai, client):
+def set_vat(worker, ai, client, database):
     message = "Use VAT rate 13.5%, excluding VAT."
     ai.results.append(
         proposal([change("vat_basis", "exclusive", message), change("vat_rate", "13.5", message)])
     )
-    assert worker.process_delivery(accept(client, message))
+    identifier = accept(client, message)
+    assert worker.process_delivery(identifier)
+    confirm_proposal(client, database, worker, identifier)
 
 
 @pytest.mark.parametrize("label", TOTAL_LABELS)
@@ -144,10 +148,11 @@ def test_full_invoice_consistency_does_not_allocate_or_round(
     identifier = accept(messaging_client, message)
     assert worker.process_delivery(identifier)
     if accepted:
+        confirmed = confirm_proposal(messaging_client, database, worker, identifier)
         expected = deepcopy(before["notes"])
         expected["line_items"][0]["unit_price"] = "30"
         assert notes(database) == expected
-        assert "Updated that." in reply_body(database, identifier)
+        assert "Updated that." in reply_body(database, confirmed)
     else:
         assert_rejected(database, identifier, before)
 
@@ -175,11 +180,12 @@ def test_stated_units_and_following_invoice_totals_remain_supported(
     )
     identifier = accept(messaging_client, message)
     assert worker.process_delivery(identifier)
+    confirmed = confirm_proposal(messaging_client, database, worker, identifier)
     assert notes(database) == {**before["notes"], "line_items": [ITEMS[0]]}
     assert rows(database, "tara_states")[0]["version"] == before["version"] + 1
-    assert "information is saved for preparation" in reply_body(database, identifier)
+    assert "information is saved for preparation" in reply_body(database, confirmed)
     run = rows(database, "tara_runs", "WHERE message_id = :id", {"id": identifier})[0]
-    assert run["action"] == "notes_merged"
+    assert run["action"] == "proposal_pending"
     assert run["error_code"] is None
 
 
@@ -194,7 +200,7 @@ def test_formatted_vat_options_cannot_update_saved_rate(
     bearer,
 ):
     worker, ai = establish(messaging_client, database, seed, bearer)
-    set_vat(worker, ai, messaging_client)
+    set_vat(worker, ai, messaging_client, database)
     before = rows(database, "tara_states")[0]
     ai.results.append(proposal([change("vat_rate", "23", "23%" if cropped else message)]))
     identifier = accept(messaging_client, message)
@@ -222,7 +228,7 @@ def test_formatted_options_also_protect_basis(
     bearer,
 ):
     worker, ai = establish(messaging_client, database, seed, bearer)
-    set_vat(worker, ai, messaging_client)
+    set_vat(worker, ai, messaging_client, database)
     before = rows(database, "tara_states")[0]
     field_value = "exclusive" if "excluding" in message else "no_vat"
     ai.results.append(proposal([change("vat_basis", field_value, message)]))
@@ -249,15 +255,16 @@ def test_compatible_vat_assertions_keep_other_notes(
     bearer,
 ):
     worker, ai = establish(messaging_client, database, seed, bearer)
-    set_vat(worker, ai, messaging_client)
+    set_vat(worker, ai, messaging_client, database)
     before = rows(database, "tara_states")[0]
     ai.results.append(proposal([change(field, value, message) for field, value in changes]))
     identifier = accept(messaging_client, message)
     assert worker.process_delivery(identifier)
+    confirmed = confirm_proposal(messaging_client, database, worker, identifier)
     assert notes(database) == {**before["notes"], **dict(changes)}
-    assert "Updated that." in reply_body(database, identifier)
+    assert "Updated that." in reply_body(database, confirmed)
     run = rows(database, "tara_runs", "WHERE message_id = :id", {"id": identifier})[0]
-    assert run["action"] == "notes_merged"
+    assert run["action"] == "proposal_pending"
     assert run["error_code"] is None
 
 
@@ -363,7 +370,7 @@ def test_later_vat_choice_heading_preserves_saved_fields_and_clarifies(
     bearer,
 ):
     worker, ai = establish(messaging_client, database, seed, bearer)
-    set_vat(worker, ai, messaging_client)
+    set_vat(worker, ai, messaging_client, database)
     before = rows(database, "tara_states")[0]
     ai.results.append(proposal([change(field, value, evidence if cropped else message)]))
     identifier = accept(messaging_client, message)
@@ -377,7 +384,7 @@ def test_later_unrelated_question_preserves_affirmative_vat_updates(
     messaging_client, database, seed, bearer
 ):
     worker, ai = establish(messaging_client, database, seed, bearer)
-    set_vat(worker, ai, messaging_client)
+    set_vat(worker, ai, messaging_client, database)
     before = rows(database, "tara_states")[0]
     message = "Use VAT 23%; which repairs apply?\nincluding VAT"
     ai.results.append(
@@ -385,8 +392,9 @@ def test_later_unrelated_question_preserves_affirmative_vat_updates(
     )
     identifier = accept(messaging_client, message)
     assert worker.process_delivery(identifier)
+    confirmed = confirm_proposal(messaging_client, database, worker, identifier)
     assert notes(database) == {**before["notes"], "vat_rate": "23", "vat_basis": "inclusive"}
-    assert "Updated that." in reply_body(database, identifier)
+    assert "Updated that." in reply_body(database, confirmed)
     run = rows(database, "tara_runs", "WHERE message_id = :id", {"id": identifier})[0]
-    assert run["action"] == "notes_merged"
+    assert run["action"] == "proposal_pending"
     assert run["error_code"] is None

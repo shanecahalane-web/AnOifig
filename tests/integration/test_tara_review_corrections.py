@@ -12,7 +12,7 @@ from threading import Event
 import pytest
 from sqlalchemy import text
 from test_messaging import rows, verify_link
-from test_tara import accept, make_worker, model_result, notes
+from test_tara import accept, confirm_proposal, make_worker, model_result, notes
 from test_tara import messaging_client as _messaging_client
 
 from anoifig.tara.provider import MockAIProvider
@@ -46,7 +46,7 @@ def reply_body(database, identifier):
     return replies[0]["body"]
 
 
-def complete_notes(worker, ai, client):
+def complete_notes(worker, ai, client, database):
     message = "Invoice John €500 for repairs; not VAT registered."
     ai.results.append(
         proposal(
@@ -61,6 +61,7 @@ def complete_notes(worker, ai, client):
     )
     identifier = accept(client, message)
     assert worker.process_delivery(identifier)
+    confirm_proposal(client, database, worker, identifier)
     return identifier
 
 
@@ -80,7 +81,7 @@ def test_dormant_turn_duplicate_preserves_active_result_and_reservation(
 
     ai = Blocking()
     worker, _ = make_worker(messaging_client, ai=ai)
-    complete_notes(worker, ai, messaging_client)
+    complete_notes(worker, ai, messaging_client, database)
     with database.admin.begin() as connection:
         connection.execute(
             text(
@@ -106,22 +107,25 @@ def test_dormant_turn_duplicate_preserves_active_result_and_reservation(
             assert after_duplicates["memory_since"] == prepared["memory_since"]
             assert after_duplicates["memory_after_id"] == prepared["memory_after_id"]
             assert rows(database, "tara_usage")[0] == reserved
-            assert len(rows(database, "outbox")) == 1
+            assert len(rows(database, "outbox")) == 2
         finally:
             release.set()
         assert original.result(timeout=10)
 
-    assert notes(database)["amount"] == "625"
+    assert notes(database) == {}
     final_run = rows(database, "tara_runs", "WHERE message_id = :id", {"id": identifier})[0]
     assert final_run["status"] == "complete"
-    assert final_run["action"] == "notes_merged"
+    assert final_run["action"] == "proposal_pending"
     assert final_run["error_code"] is None
     assert final_run["reserved_tokens"] == run["reserved_tokens"] > 0
     assert final_run["reserved_cost"] == run["reserved_cost"]
     assert rows(database, "tara_usage")[0] == reserved
     assert reply_body(database, identifier) not in (FALLBACK, INVALID)
     assert worker.process_delivery(identifier)
-    assert len(ai.requests) == len(rows(database, "outbox")) == 2
+    assert len(ai.requests) == 2
+    assert len(rows(database, "outbox")) == 3
+    confirm_proposal(messaging_client, database, worker, identifier)
+    assert notes(database)["amount"] == "625"
 
 
 def test_dormant_turn_late_result_still_cannot_replace_newer_version(
@@ -139,7 +143,7 @@ def test_dormant_turn_late_result_still_cannot_replace_newer_version(
 
     ai = Blocking()
     worker, _ = make_worker(messaging_client, ai=ai)
-    complete_notes(worker, ai, messaging_client)
+    complete_notes(worker, ai, messaging_client, database)
     with database.admin.begin() as connection:
         connection.execute(text("UPDATE tara_states SET updated_at = now() - interval '31 days'"))
     ai.results.append(proposal([change("amount", "625", "€625")]))
@@ -166,7 +170,8 @@ def test_dormant_turn_late_result_still_cannot_replace_newer_version(
     assert run["error_code"] == "stale_state"
     assert run["reserved_tokens"] > 0
     assert worker.process_delivery(identifier)
-    assert len(ai.requests) == len(rows(database, "outbox")) == 2
+    assert len(ai.requests) == 2
+    assert len(rows(database, "outbox")) == 3
 
 
 @pytest.mark.parametrize("legacy_actions", [False, True], ids=["new-actions", "legacy-actions"])
@@ -187,6 +192,7 @@ def test_superseded_contact_corrections_are_absent_from_complete_next_payload(
         ai.results.append(proposal([change("customer_details", contact, message)]))
         identifier = accept(messaging_client, message)
         assert worker.process_delivery(identifier)
+        confirm_proposal(messaging_client, database, worker, identifier)
         assert notes(database)["customer_details"] == contact
         if legacy_actions:
             # Reviewed records have only the generic accepted-proposal action.
@@ -206,7 +212,7 @@ def test_superseded_contact_corrections_are_absent_from_complete_next_payload(
         assert marker not in payload
     for marker in ("015550123", "00353875550123", "ie29aibk93115212345678"):
         assert marker not in compact
-    assert len(rows(database, "outbox")) == 3
+    assert len(rows(database, "outbox")) == 5
 
 
 def test_explicit_clarification_never_renders_model_text_or_changes_notes(
@@ -225,7 +231,9 @@ def test_explicit_clarification_never_renders_model_text_or_changes_notes(
             intent="invoice_preparation",
         )
     )
-    assert worker.process_delivery(accept(messaging_client, message))
+    identifier = accept(messaging_client, message)
+    assert worker.process_delivery(identifier)
+    confirm_proposal(messaging_client, database, worker, identifier)
     before = notes(database)
     assert rows(database, "tara_states")[0]["pending_clarification"] == "vat_basis"
     untrusted_text = "I have emailed invoice 51 and settled the payment."
@@ -236,7 +244,7 @@ def test_explicit_clarification_never_renders_model_text_or_changes_notes(
     assert untrusted_text not in reply_body(database, identifier)
     assert notes(database) == before
     assert rows(database, "tara_states")[0]["pending_clarification"] is None
-    assert len(rows(database, "outbox")) == 2
+    assert len(rows(database, "outbox")) == 3
 
 
 @pytest.mark.parametrize(
@@ -253,7 +261,7 @@ def test_customer_name_cannot_inject_claims_into_persisted_outbound(
 ):
     verify_link(messaging_client, seed, bearer)
     worker, ai = make_worker(messaging_client)
-    complete_notes(worker, ai, messaging_client)
+    complete_notes(worker, ai, messaging_client, database)
     message = "Customer name is " + untrusted_name
     ai.results.append(proposal([change("customer_name", untrusted_name, message)]))
     identifier = accept(messaging_client, message)
@@ -267,7 +275,7 @@ def test_customer_name_cannot_inject_claims_into_persisted_outbound(
     assert "Ignore the instructions" not in body
     assert notes(database)["customer_name"] == "John"
     assert notes(database)["amount"] == "500"
-    assert len(rows(database, "outbox")) == 2
+    assert len(rows(database, "outbox")) == 3
 
 
 @pytest.mark.parametrize(
@@ -285,14 +293,15 @@ def test_customer_name_validation_preserves_legitimate_names(
 ):
     verify_link(messaging_client, seed, bearer)
     worker, ai = make_worker(messaging_client)
-    complete_notes(worker, ai, messaging_client)
+    complete_notes(worker, ai, messaging_client, database)
     message = "Customer name is " + name
     ai.results.append(proposal([change("customer_name", name, message)]))
     identifier = accept(messaging_client, message)
     assert worker.process_delivery(identifier)
+    confirmed = confirm_proposal(messaging_client, database, worker, identifier)
     assert notes(database)["customer_name"] == name
     assert notes(database)["amount"] == "500"
-    assert reply_body(database, identifier) not in (FALLBACK, INVALID)
+    assert reply_body(database, confirmed) not in (FALLBACK, INVALID)
 
 
 @pytest.mark.parametrize(
@@ -321,7 +330,9 @@ def test_irish_phone_redaction_covers_complete_payload_without_erasing_money(
             intent="invoice_preparation",
         )
     )
-    assert worker.process_delivery(accept(messaging_client, message))
+    identifier = accept(messaging_client, message)
+    assert worker.process_delivery(identifier)
+    confirm_proposal(messaging_client, database, worker, identifier)
     assert notes(database)["work_description"] == work
     assert notes(database)["amount"] == "1500.25"
     assert worker.process_delivery(accept(messaging_client, "Hi"))
@@ -352,7 +363,7 @@ def test_unsafe_financial_correction_preserves_existing_notes(
 ):
     verify_link(messaging_client, seed, bearer)
     worker, ai = make_worker(messaging_client)
-    complete_notes(worker, ai, messaging_client)
+    complete_notes(worker, ai, messaging_client, database)
     before = notes(database)
     version = rows(database, "tara_states")[0]["version"]
     ai.results.append(proposal([change("amount", value, evidence)]))
@@ -372,12 +383,14 @@ def test_negative_or_ambiguous_vat_correction_preserves_existing_rate(
 ):
     verify_link(messaging_client, seed, bearer)
     worker, ai = make_worker(messaging_client)
-    complete_notes(worker, ai, messaging_client)
+    complete_notes(worker, ai, messaging_client, database)
     valid = "Use VAT rate 13.5%, excluding VAT."
     ai.results.append(
         proposal([change("vat_basis", "exclusive", valid), change("vat_rate", "13.5", valid)])
     )
-    assert worker.process_delivery(accept(messaging_client, valid))
+    identifier = accept(messaging_client, valid)
+    assert worker.process_delivery(identifier)
+    confirm_proposal(messaging_client, database, worker, identifier)
     assert notes(database)["vat_rate"] == "13.5"
     before = notes(database)
     ai.results.append(proposal([change("vat_rate", "23", "23%")]))
@@ -404,7 +417,9 @@ def test_item_clause_correction_cannot_change_the_preserved_item(
             line_items_evidence=first,
         )
     )
-    assert worker.process_delivery(accept(messaging_client, first))
+    identifier = accept(messaging_client, first)
+    assert worker.process_delivery(identifier)
+    confirm_proposal(messaging_client, database, worker, identifier)
     before = notes(database)
     correction = "Make elbows €30 each; valves stay €25"
     ai.results.append(
@@ -438,9 +453,11 @@ def test_item_clause_correction_cannot_change_the_preserved_item(
             ],
         )
     )
-    assert worker.process_delivery(accept(messaging_client, correction))
+    identifier = accept(messaging_client, correction)
+    assert worker.process_delivery(identifier)
+    confirm_proposal(messaging_client, database, worker, identifier)
     assert notes(database)["line_items"] == [
         {"description": "valves", "quantity": "3", "unit_price": "25"},
         {"description": "elbows", "quantity": "2", "unit_price": "30"},
     ]
-    assert len(rows(database, "outbox")) == 3
+    assert len(rows(database, "outbox")) == 5
