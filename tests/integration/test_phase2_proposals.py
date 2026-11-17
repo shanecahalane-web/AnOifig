@@ -335,6 +335,7 @@ def test_malformed_confirmation_never_reaches_model_or_changes_notes(
     assert len(ai.requests) == calls
     assert state(database)["notes"] == before["notes"]
     assert state(database)["version"] == before["version"]
+    assert rows(database, "tara_pending_proposals")[0]["status"] == "pending"
     [reply] = rows(database, "messages", "WHERE reply_to_id = :id", {"id": identifier})
     assert reply["body"] == "Please send the exact APPLY or REJECT command from the preview."
     assert worker.process_delivery(accept(messaging_client, "Hello again"))
@@ -342,18 +343,94 @@ def test_malformed_confirmation_never_reaches_model_or_changes_notes(
     assert token not in caplog.text
 
 
+@pytest.mark.parametrize("verb", ["APPLY", "REJECT"])
+@pytest.mark.parametrize(
+    "template",
+    [
+        "{verb} {first} {last}",
+        "\t{verb}\t{first}\n{last}\u00a0",
+        "Please [{mixed}: ({first})-({last})] again.",
+        "{verb}_{lower_first}.{lower_last}",
+        "{mixed} {first} {last}x",
+        "{verb} {first}:{middle}:{end}",
+    ],
+    ids=["two-halves", "whitespace", "quoted", "lowercase", "suffix", "three-groups"],
+)
+def test_grouped_confirmation_is_private_through_ingress_and_history(
+    verb, template, messaging_client, database, seed, bearer, caplog
+):
+    caplog.set_level(logging.INFO)
+    worker, ai = established(messaging_client, database, seed, bearer)
+    before = state(database)
+    _, _, outbox, token = propose(messaging_client, database, worker, ai)
+    accept_preview(database, outbox)
+    first, last = token[:16], token[16:]
+    command = template.format(
+        verb=verb,
+        mixed=verb.title(),
+        first=first,
+        last=last,
+        lower_first=first.lower(),
+        lower_last=last.lower(),
+        middle=last[:8],
+        end=last[8:],
+    )
+    calls = len(ai.requests)
+    identifier = accept(messaging_client, command)
+    [accepted] = rows(database, "messages", "WHERE id = :id", {"id": identifier})
+    assert worker.process_delivery(identifier)
+    [processed] = rows(database, "messages", "WHERE id = :id", {"id": identifier})
+    [reply] = rows(database, "messages", "WHERE reply_to_id = :id", {"id": identifier})
+    after = state(database)
+    assert (after["notes"], after["version"]) == (before["notes"], before["version"])
+    assert rows(database, "tara_pending_proposals")[0]["status"] == "pending"
+
+    live_requests = ai.requests[calls:]
+    ordinary = "Apply VAT 23% to this invoice"
+    assert worker.process_delivery(accept(messaging_client, ordinary))
+    assert ai.requests[-1].message == ordinary
+    assert {"role": "inbound", "text": "Hello"} in ai.requests[-1].history
+    diagnostics = caplog.text
+    assert {
+        "raw body persisted at ingress": accepted["body"] == command,
+        "raw body persisted after processing": processed["body"] == command,
+        "model invoked for confirmation": bool(live_requests),
+        "challenge replayed to model": first.lower() in ai.requests[-1].payload().lower(),
+        "challenge logged": first.lower() in diagnostics.lower()
+        or last.lower() in diagnostics.lower(),
+    } == {
+        "raw body persisted at ingress": False,
+        "raw body persisted after processing": False,
+        "model invoked for confirmation": False,
+        "challenge replayed to model": False,
+        "challenge logged": False,
+    }
+    assert accepted["body"] == processed["body"] == "[confirmation omitted]"
+    assert reply["body"] == "Please send the exact APPLY or REJECT command from the preview."
+    for secret in (first, last, last[:8], last[8:]):
+        assert secret.lower() not in ai.requests[-1].payload().lower()
+
+
+@pytest.mark.parametrize("form", ["contiguous", "split-apply", "split-reject"])
 def test_legacy_confirmation_without_action_is_not_replayed(
-    messaging_client, database, seed, bearer
+    form, messaging_client, database, seed, bearer
 ):
     worker, ai = established(messaging_client, database, seed, bearer)
     _, _, _, token = propose(messaging_client, database, worker, ai)
     # Simulate a historical processed record with the old raw body and no tag.
     identifier = accept(messaging_client, f"APPLY {token}x")
     assert worker.process_delivery(identifier)
+    if form == "contiguous":
+        command = f"APPLY {token}x"
+        note = f"Legacy work reference x{token}x"
+    else:
+        verb = form.removeprefix("split-").upper()
+        command = f"{verb} {token[:16]} {token[16:]}"
+        note = f"Copied preview reply: {command}"
     with database.admin.begin() as connection:
         connection.execute(
             text("UPDATE messages SET body = :body WHERE id = :id"),
-            {"id": identifier, "body": f"APPLY {token}x"},
+            {"id": identifier, "body": command},
         )
         connection.execute(
             text("UPDATE tara_runs SET action = NULL WHERE message_id = :id"), {"id": identifier}
@@ -363,18 +440,20 @@ def test_legacy_confirmation_without_action_is_not_replayed(
                 "UPDATE tara_states SET notes = "
                 "jsonb_set(notes, '{work_description}', to_jsonb(CAST(:body AS text)))"
             ),
-            {"body": f"Legacy work reference x{token}x"},
+            {"body": note},
         )
 
     assert worker.process_delivery(accept(messaging_client, "Apply VAT 23%"))
     request = ai.requests[-1]
     assert request.message == "Apply VAT 23%"
     assert request.history == ({"role": "inbound", "text": "Hello"},)
-    assert token not in request.payload()
+    assert token[:16] not in request.payload()
+    assert token[16:] not in request.payload()
 
 
+@pytest.mark.parametrize("form", ["exact", "legacy-split-apply", "legacy-split-reject"])
 def test_confirmation_terminal_fallback_does_not_replay_challenge(
-    messaging_client, database, seed, bearer, monkeypatch, caplog
+    form, messaging_client, database, seed, bearer, monkeypatch, caplog
 ):
     caplog.set_level(logging.INFO)
     worker, ai = established(messaging_client, database, seed, bearer)
@@ -382,6 +461,15 @@ def test_confirmation_terminal_fallback_does_not_replay_challenge(
     _, _, outbox, token = propose(messaging_client, database, worker, ai)
     accept_preview(database, outbox)
     identifier = accept(messaging_client, f"APPLY {token}")
+    command = f"APPLY {token}"
+    if form != "exact":
+        verb = form.removeprefix("legacy-split-").upper()
+        command = f"{verb} {token[:16]} {token[16:]}"
+        with database.admin.begin() as connection:
+            connection.execute(
+                text("UPDATE messages SET body = :body WHERE id = :id"),
+                {"id": identifier, "body": command},
+            )
     requests = len(ai.requests)
     failed = 0
     reply_to_inbound = tara_service.reply_to_inbound
@@ -390,7 +478,7 @@ def test_confirmation_terminal_fallback_does_not_replay_challenge(
         nonlocal failed
         if message.id == identifier and error_code is None:
             failed += 1
-            raise SQLAlchemyError(f"synthetic reply insertion failure with challenge {token}")
+            raise SQLAlchemyError(f"synthetic reply insertion failure with challenge {command}")
         return reply_to_inbound(
             session, message, body, error_code=error_code, conversation_version=conversation_version
         )
@@ -416,11 +504,12 @@ def test_confirmation_terminal_fallback_does_not_replay_challenge(
     assert run["action"] == "proposal_unavailable"
 
     assert worker.process_delivery(accept(messaging_client, "Hello after recovery"))
-    assert token not in ai.requests[-1].payload()
     assert any(turn["text"] == "Hello" for turn in ai.requests[-1].history)
-    assert token not in caplog.text
     [inbound] = rows(database, "messages", "WHERE id = :id", {"id": identifier})
-    assert token not in inbound["body"]
+    assert inbound["body"] == "[confirmation omitted]"
+    for output in (ai.requests[-1].payload(), caplog.text, reply["body"]):
+        assert token[:16] not in output
+        assert token[16:] not in output
     assert inbound["processing_attempts"] == MAX_ATTEMPTS
 
 

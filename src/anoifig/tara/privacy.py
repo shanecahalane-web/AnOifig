@@ -8,16 +8,30 @@ OMITTED_CONFIRMATION = "[confirmation omitted]"
 _CHALLENGE = re.compile(r"[0-9a-f]{32,}", re.IGNORECASE)
 _COMMAND_SHAPE = re.compile(r"(?:APPLY|REJECT)\b(?:[\s:=_-]+\S+)?", re.IGNORECASE)
 _CODE_ARGUMENT = re.compile(r"\b(?:APPLY|REJECT)\b[\s:=_-]+[a-z0-9_-]{24,}", re.IGNORECASE)
+_GROUPED_CODE_ARGUMENT = re.compile(
+    r"(?<![^\W_])(?:APPLY|REJECT)[\W_]+([0-9a-f]+(?:[\W_]+[0-9a-f]+)+)",
+    re.IGNORECASE,
+)
+_HEX_DIGITS = frozenset("0123456789abcdefABCDEF")
+
+
+def _has_grouped_challenge(body: str) -> bool:
+    # Require a confirmation verb followed by a challenge's worth of hex digits.
+    # WhatsApp formatting can put whitespace or punctuation between the groups.
+    return any(
+        sum(char in _HEX_DIGITS for char in match[1]) >= 32
+        for match in _GROUPED_CODE_ARGUMENT.finditer(body)
+    )
 
 
 def is_confirmation_shaped(body: str) -> bool:
-    # Reserve a bare verb or single-argument command even if the code is invalid.
-    # Ordinary instructions such as "Apply VAT 23%" still reach Tara.
+    """Classify sensitive text independently of exact command validation."""
     return (
         body == OMITTED_CONFIRMATION
         or _CHALLENGE.search(body) is not None
         or _COMMAND_SHAPE.fullmatch(body.strip().strip("\"'“”‘’`").strip()) is not None
         or _CODE_ARGUMENT.search(body) is not None
+        or _has_grouped_challenge(body)
     )
 
 
@@ -111,6 +125,8 @@ CONTACT_PATTERNS = (
 
 
 def minimise(text: str, *, contact_details: str | None = None) -> str:
+    if _has_grouped_challenge(text):
+        return OMITTED_CONFIRMATION
     text = _CHALLENGE.sub(OMITTED_CONFIRMATION, text)
     if contact_details:
         text = text.replace(contact_details, "[contact details omitted]")
